@@ -136,7 +136,9 @@ static void finish(const char *why) {
     state = 2;
     if (out) { fclose(out); out = NULL; }
     LOG("[trace] end after %lld records (%s)\n", (long long)n, why);
-    if (getenv("RECOMP_TRACE_EXIT")) { fflush(stderr); _exit(0); }
+    extern void fnprof_graph_write(void);  // (runtime/fnprof.c: a call graph being recorded ends with the trace)
+    fnprof_graph_write();
+    if (getenv("RECOMP_TRACE_EXIT") || getenv("LARECOMP_FNPROF_GRAPH_EXIT")) { fflush(stderr); _exit(0); }
 }
 
 // In play or in a menu (runtime/hle/input.c's "A and B swapped in menus", #84): the player is updated each frame while
@@ -187,6 +189,8 @@ void smm2_player_hook(Cpu *c) {
     shot_at(n);
     bool scripted = padscript_game_clock();
     int64_t pos = scripted ? padscript_pos() : 0;
+    extern void fnprof_player_update(int64_t n);  // (runtime/fnprof.c: the call graph's window, LARECOMP_FNPROF_GRAPH)
+    fnprof_player_update(n);
     if (out && !eden_point()) record(self, (int32_t)(scripted ? pos : n), (uint32_t)padscript_buttons());
     else if (out) { eden_idx = (int32_t)(scripted ? pos : n); eden_buttons = (uint32_t)padscript_buttons(); eden_due = true; }
     n++;

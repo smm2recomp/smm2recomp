@@ -347,9 +347,9 @@ class Module:
                 return [f'c->x[30] = {hx(a + 4)}; {fname(t)}(c);']
             return [f'c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c);']
         if k == 'blr':
-            return [f'c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; rt_dispatch(c);']
+            return [f'c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; FN_EDGE({hx(a)}, 1); rt_dispatch(c);']
         if k == 'br':
-            return [f'c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);']
+            return [f'c->pc = {ins.target}; FN_EDGE({hx(a)}, 2); __attribute__((musttail)) return rt_dispatch(c);']
         if k == 'ret':
             return ['return;']
         raise Unsupported(k)
@@ -426,7 +426,7 @@ class Module:
                 else:
                     out.append(f'    c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c);')
             elif k == 'blr':
-                out.append(f'    c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; rt_dispatch(c);')
+                out.append(f'    c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; FN_EDGE({hx(a)}, 1); rt_dispatch(c);')
             elif k == 'br':
                 jt = tables.get(a)
                 if jt == 'all':
@@ -437,7 +437,7 @@ class Module:
                     out.append(f'    switch ({ins.target}) {{ {cases} default: break; }}')
                     out.append(f'    c->pc = {ins.target}; goto L_dispatch;')
                     continue
-                out.append(f'    c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);')
+                out.append(f'    c->pc = {ins.target}; FN_EDGE({hx(a)}, 2); __attribute__((musttail)) return rt_dispatch(c);')
             elif k == 'ret':
                 out.append('    return;')
             last = k

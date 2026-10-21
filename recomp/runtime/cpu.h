@@ -60,6 +60,10 @@ typedef uint8_t __attribute__((may_alias)) u8a;
 extern volatile int g_fnprof;
 void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0);
 #define FN_ENTER(a) do { if (__builtin_expect(g_fnprof, 0)) fnprof_hit(a, c->x[30], c->x[0]); } while (0)
+// An indirect transfer leaving a function (tools/gen.py: blr = kind 1, a br out of the function = kind 2), its target
+// in c->pc: the call graph's exact indirect edges (runtime/fnprof.c, LARECOMP_FNPROF_GRAPH)
+void fnprof_edge(uint64_t site, uint64_t target, int kind);
+#define FN_EDGE(site, kind) do { if (__builtin_expect(g_fnprof, 0)) fnprof_edge(site, c->pc, kind); } while (0)
 
 #define LD8(a)  (*(const u8a *)(uintptr_t)(a))
 #define LD16(a) (*(const u16u *)(uintptr_t)(a))

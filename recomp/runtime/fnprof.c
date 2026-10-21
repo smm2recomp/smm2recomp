@@ -1,9 +1,11 @@
 // Function-entry profiler. LARECOMP_FNPROF=<from>:<to> counts guest function entries (every generated
 // function calls FN_ENTER) between those presented frames, then writes build/fnprof.txt (addr count, most
 // called first). Diffing two runs shows which game functions a change brings in; counts also show hot code.
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "hle.h"
 #include "platform.h"
@@ -80,6 +82,113 @@ void fnprof_dump_ring(void) {
     }
 }
 
+// ---- the call graph (LARECOMP_FNPROF_GRAPH=<file>)
+// Every guest function entry as (return address, function), kind 0, and every indirect transfer out of a function as
+// (site, target), kind 1 for a blr and 2 for a br (FN_EDGE, emitted by tools/gen.py), each pair once per thread with
+// its count, the order it was first seen in (one sequence over all threads) and the followed player's update it was
+// first seen in. The window is player updates: RECOMP_FNPROF_UPDATES=<from>:<to> (default 0:-1, to the end), counted
+// by games/smm2/trace.c (fnprof_player_update); at <to> the file is written, and with LARECOMP_FNPROF_GRAPH_EXIT=1 the
+// program ends. The thread that runs the player updates is marked "main". Per-thread tables, so no locks on the way.
+#define GSLOTS (1 << 18)
+typedef struct { uint64_t a, b, seq; int64_t upd; uint32_t kind, count; } GEdge;
+typedef struct GTable { GEdge *e; int tid; uint64_t n; struct GTable *next; } GTable;
+static volatile int g_graph;
+static _Atomic uint64_t g_seq;
+static volatile int64_t g_upd = -1;
+static int g_main_tid = -1;
+static __thread GTable *g_mine;
+static GTable *g_tables;
+static pthread_mutex_t g_tables_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_ntables;
+
+static GTable *graph_table(void) {
+    if (g_mine) return g_mine;
+    GTable *t = calloc(1, sizeof *t);
+    t->e = calloc(GSLOTS, sizeof(GEdge));
+    pthread_mutex_lock(&g_tables_mu);
+    t->tid = g_ntables++;
+    t->next = g_tables;
+    g_tables = t;
+    pthread_mutex_unlock(&g_tables_mu);
+    return g_mine = t;
+}
+
+static void graph_add(uint64_t a, uint64_t b, uint32_t kind) {
+    GTable *t = graph_table();
+    uint64_t h = ((a >> 2) * 0x9E3779B97F4A7C15ull) ^ ((b >> 2) * 0xC2B2AE3D27D4EB4Full) ^ kind;
+    for (uint32_t n = 0, i = (uint32_t)(h >> 40) & (GSLOTS - 1); n < GSLOTS; n++, i = (i + 1) & (GSLOTS - 1)) {
+        GEdge *e = &t->e[i];
+        if (e->a == a && e->b == b && e->kind == kind) { e->count++; return; }
+        if (e->a == 0) {
+            e->a = a, e->b = b, e->kind = kind, e->count = 1;
+            e->seq = atomic_fetch_add_explicit(&g_seq, 1, memory_order_relaxed);
+            e->upd = g_upd;
+            t->n++;
+            return;
+        }
+    }
+}
+
+void fnprof_edge(uint64_t site, uint64_t target, int kind) {
+    if (g_graph) graph_add(site, target, (uint32_t)kind);
+}
+
+void fnprof_graph_write(void);
+static void graph_write(void) { fnprof_graph_write(); }
+void fnprof_graph_write(void) {
+    static int done;
+    const char *out = getenv("LARECOMP_FNPROF_GRAPH");
+    if (done || !out) return;
+    done = 1;
+    g_graph = 0;
+    FILE *f = fopen(out, "w");
+    if (!f) { LOG("[fnprof] graph: cannot write %s\n", out); return; }
+    fprintf(f, "# fnprof graph v1: C tid return_address function count seq update | I tid site target kind count seq update\n");
+    fprintf(f, "# main %d last_update %lld\n", g_main_tid, (long long)g_upd);
+    uint64_t n = 0;
+    for (GTable *t = g_tables; t; t = t->next)
+        for (uint32_t i = 0; i < GSLOTS; i++) {
+            GEdge *e = &t->e[i];
+            if (!e->a) continue;
+            if (e->kind == 0)
+                fprintf(f, "C %d %llx %llx %u %llu %lld\n", t->tid, (unsigned long long)e->a, (unsigned long long)e->b,
+                        e->count, (unsigned long long)e->seq, (long long)e->upd);
+            else
+                fprintf(f, "I %d %llx %llx %u %u %llu %lld\n", t->tid, (unsigned long long)e->a, (unsigned long long)e->b,
+                        e->kind, e->count, (unsigned long long)e->seq, (long long)e->upd);
+            n++;
+        }
+    fclose(f);
+    LOG("[fnprof] graph: %llu edges over %d threads, written %s\n", (unsigned long long)n, g_ntables, out);
+}
+
+static void graph_exit(void) { graph_write(); }
+
+// games/smm2/trace.c: the followed player's update n is starting
+void fnprof_player_update(int64_t n) {
+    static int64_t from = -2, to = -1;
+    if (from == -2) {
+        from = -1;
+        if (!getenv("LARECOMP_FNPROF_GRAPH")) return;
+        from = 0;
+        const char *e = getenv("RECOMP_FNPROF_UPDATES");
+        if (e) sscanf(e, "%lld:%lld", (long long *)&from, (long long *)&to);
+        atexit(graph_exit);
+    }
+    if (from < 0) return;
+    g_upd = n;
+    if (n == from) {
+        g_main_tid = graph_table()->tid;
+        g_graph = 1;
+        g_fnprof = 1;
+        LOG("[fnprof] graph on at player update %lld\n", (long long)n);
+    }
+    if (to >= 0 && n == to) {
+        graph_write();
+        if (getenv("LARECOMP_FNPROF_GRAPH_EXIT")) { fflush(stderr); _exit(0); }
+    }
+}
+
 void fnprof_hit(uint64_t a, uint64_t lr, uint64_t x0) {
     if (ring_n) {
         if (ring_n < 0) {
@@ -95,6 +204,7 @@ void fnprof_hit(uint64_t a, uint64_t lr, uint64_t x0) {
         }
     }
     if (bt_n) bt_check(a, lr, x0);
+    if (g_graph) graph_add(lr, a, 0);
     uint32_t h = (uint32_t)((a >> 2) * 0x9E3779B1u) & (NSLOT - 1);
     for (int n = 0; n < NSLOT; n++, h = (h + 1) & (NSLOT - 1)) {
         uint64_t cur = atomic_load_explicit(&slots[h].addr, memory_order_relaxed);
