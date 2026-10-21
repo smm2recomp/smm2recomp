@@ -30,6 +30,25 @@ static void bt_check(uint64_t a, uint64_t lr, uint64_t x0) {
             while (*p == ',' || *p == ' ') p++;
         }
     }
+    // LARECOMP_FNPROF_BT_FROM=<presented frame>: only entries from that frame on (a call in play, not a create's)
+    static long bt_from = -1;
+    if (bt_from < 0) bt_from = getenv("LARECOMP_FNPROF_BT_FROM") ? atol(getenv("LARECOMP_FNPROF_BT_FROM")) : 0;
+    if (bt_from) {
+        extern uint64_t renderer_present_count(void);
+        if (renderer_present_count() < (uint64_t)bt_from) return;
+    }
+    // LARECOMP_FNPROF_BT_X0_AT=<hex addr>,<hex off>: only entries whose x0 is the pointer at addr + off (one object's)
+    static int x0_set = -1;
+    static uint64_t x0_addr, x0_off;
+    if (x0_set < 0) {
+        const char *e = getenv("LARECOMP_FNPROF_BT_X0_AT");
+        x0_set = e != NULL;
+        if (e) { char *p; x0_addr = strtoull(e, &p, 16); x0_off = *p ? strtoull(p + 1, NULL, 16) : 0; }
+    }
+    if (x0_set) {
+        uint64_t at = x0_addr + x0_off;
+        if (at < GUEST_LO || at + 8 > GUEST_HI || x0 != *(uint64_t *)(uintptr_t)at) return;
+    }
     for (int i = 0; i < bt_n; i++)
         if (bt_addrs[i] == a && !atomic_exchange(&bt_done[i], 1)) {
             if (i == 0) g_bt_first_x0 = x0;
