@@ -14,9 +14,11 @@
 __attribute__((weak)) const bool g_game_pad_clock = false;
 
 static uint64_t *frames;  // buttons per script frame
+static int32_t (*sticks)[4];  // and the sticks (lx, ly, rx, ry; LX=n LY=n RX=n RY=n on the line, 0 when not given)
 static int64_t nframes, start_tick;
 static _Atomic int64_t ticks;       // clock ticks seen
 static _Atomic uint64_t current;    // what the game reads
+static _Atomic int64_t current_l, current_r;   // its sticks, (x << 32) | (uint32_t)y
 static int loaded = -1;             // -1: not looked at yet
 static bool game_clock;
 
@@ -50,16 +52,28 @@ static void load(void) {
         long n = strtol(tok, &end, 10);
         if (*end || n < 0) FATAL("[pad] %s:%lld: frame count expected, got \"%s\"\n", path, (long long)ln, tok);
         uint64_t b = 0;
+        int32_t st[4] = {0, 0, 0, 0};
         while ((tok = strtok_r(NULL, " \t\r\n", &save))) {
             uint64_t bit;
+            static const char *axes[4] = {"LX=", "LY=", "RX=", "RY="};
+            int axis = -1;
+            for (int k = 0; k < 4; k++)
+                if (!strncasecmp(tok, axes[k], 3)) axis = k;
+            if (axis >= 0) {
+                long v = strtol(tok + 3, &end, 10);
+                if (*end || v < -32768 || v > 32767) FATAL("[pad] %s:%lld: bad stick value \"%s\"\n", path, (long long)ln, tok);
+                st[axis] = (int32_t)v;
+                continue;
+            }
             if (!padscript_parse_button(tok, &bit)) FATAL("[pad] %s:%lld: unknown button \"%s\"\n", path, (long long)ln, tok);
             b |= bit;
         }
         if (nframes + n > cap) {
             cap = (nframes + n) * 2 + 64;
             frames = realloc(frames, (size_t)cap * sizeof *frames);
+            sticks = realloc(sticks, (size_t)cap * sizeof *sticks);
         }
-        for (long i = 0; i < n; i++) frames[nframes++] = b;
+        for (long i = 0; i < n; i++) { memcpy(sticks[nframes], st, sizeof st); frames[nframes++] = b; }
     }
     fclose(f);
     const char *clk = getenv("RECOMP_PAD_CLOCK");
@@ -82,6 +96,11 @@ bool padscript_game_clock(void) { return padscript_active() && game_clock; }
 
 uint64_t padscript_buttons(void) { return padscript_active() ? current : 0; }
 
+void padscript_sticks(int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
+    int64_t l = padscript_active() ? current_l : 0, r = padscript_active() ? current_r : 0;
+    *lx = (int32_t)(l >> 32), *ly = (int32_t)(uint32_t)l, *rx = (int32_t)(r >> 32), *ry = (int32_t)(uint32_t)r;
+}
+
 // RECOMP_PAD_ORIGIN=player: the presented-frame clock starts at the game's first player update (the same game frame
 // in every runtime that hooks it: the Ryujinx trace build counts its frames from there too), not at boot.
 static _Atomic int origin_set;
@@ -101,7 +120,10 @@ void padscript_tick(void) {
     if (!padscript_active()) return;
     int64_t t = ticks++;
     int64_t i = t - start_tick;
-    current = i >= 0 && i < nframes ? frames[i] : 0;
+    bool in = i >= 0 && i < nframes;
+    current_l = in ? ((int64_t)sticks[i][0] << 32) | (uint32_t)sticks[i][1] : 0;
+    current_r = in ? ((int64_t)sticks[i][2] << 32) | (uint32_t)sticks[i][3] : 0;
+    current = in ? frames[i] : 0;
     if (i == nframes) {
         LOG("[pad] script done (%lld frames)\n", (long long)nframes);
         if (getenv("RECOMP_PAD_EXIT")) { fflush(stderr); _exit(0); }  // (scripted runs that end with the script)

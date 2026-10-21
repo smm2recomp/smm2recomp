@@ -719,8 +719,20 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
         return;
     }
     if (id != 0) return;  // docked: Handheld stays disconnected
-    if (padscript_active()) {  // a scripted replay (RECOMP_PAD_SCRIPT): the script's buttons alone, sticks at rest
-        *(uint64_t *)(s + 8) = padscript_buttons();
+    if (padscript_active()) {  // a scripted replay (RECOMP_PAD_SCRIPT): the script's buttons and sticks alone
+        uint64_t b = padscript_buttons();
+        int32_t lx, ly, rx, ry;
+        padscript_sticks(&lx, &ly, &rx, &ry);
+        if (lx < -16000) b |= 1ull << 16;   // (the stick directions as above)
+        if (ly > 16000) b |= 1ull << 17;
+        if (lx > 16000) b |= 1ull << 18;
+        if (ly < -16000) b |= 1ull << 19;
+        if (rx < -16000) b |= 1ull << 20;
+        if (ry > 16000) b |= 1ull << 21;
+        if (rx > 16000) b |= 1ull << 22;
+        if (ry < -16000) b |= 1ull << 23;
+        *(uint64_t *)(s + 8) = b;
+        *(int32_t *)(s + 16) = lx, *(int32_t *)(s + 20) = ly, *(int32_t *)(s + 24) = rx, *(int32_t *)(s + 28) = ry;
         *(uint32_t *)(s + 32) = 1;  // IsConnected
         return;
     }
