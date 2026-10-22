@@ -815,6 +815,8 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
         *(int32_t *)(s + 16) = lx, *(int32_t *)(s + 20) = ly, *(int32_t *)(s + 24) = rx, *(int32_t *)(s + 28) = ry;
         *(uint32_t *)(s + 32) = 1;  // IsConnected
         game_pad_read(b, lx, ly, rx, ry);  // (what the game read, as for a controller: a replay records it again)
+        extern void probe_pad_read(uint64_t buttons, int32_t lx, int32_t ly);  // (runtime/probe.c: its P lines)
+        probe_pad_read(b, lx, ly);
         return;
     }
     extern void warp_game_tick(Cpu *c);

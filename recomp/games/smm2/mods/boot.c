@@ -172,7 +172,11 @@ void boot_game_tick(Cpu *c) {
             : standing ? "cleared, the player still for 30 frames" : "a scene change");
         // _exit, not exit: the game's own threads are mid-course and its teardown is not wanted here. What a run
         // writes is written as it goes (a play recording flushes every update: games/smm2/playrec.c), so only this
-        // process's own buffers are left.
+        // process's own buffers are left, and the probe log and a call graph being recorded (kept in memory).
+        extern void probe_flush(void);         // (runtime/probe.c)
+        extern void fnprof_graph_write(void);  // (runtime/fnprof.c)
+        probe_flush();
+        fnprof_graph_write();
         fflush(NULL);
         _exit(0);
     }

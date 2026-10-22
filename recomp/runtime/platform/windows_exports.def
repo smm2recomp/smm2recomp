@@ -7,7 +7,12 @@ rt_brk
 rt_udf
 rt_ticks
 fnprof_hit
+fnprof_edge
+fn_enter_hook
+probe_after
 g_fnprof DATA
+g_probe DATA
+g_probe_pending DATA
 smm2_player_hook
 smm2_eden_point
 smm2_eden_return

@@ -185,7 +185,12 @@ void fnprof_player_update(int64_t n) {
     }
     if (to >= 0 && n == to) {
         graph_write();
-        if (getenv("LARECOMP_FNPROF_GRAPH_EXIT")) { fflush(stderr); _exit(0); }
+        if (getenv("LARECOMP_FNPROF_GRAPH_EXIT")) {
+            extern void probe_flush(void);  // (runtime/probe.c: the probe log, which _exit would lose)
+            probe_flush();
+            fflush(stderr);
+            _exit(0);
+        }
     }
 }
 

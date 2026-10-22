@@ -22,8 +22,11 @@ void rt_svc(Cpu *c, uint32_t imm, uint64_t pc) { (void)c; (void)imm; (void)pc; }
 void rt_brk(Cpu *c, uint32_t imm, uint64_t pc) { (void)c; (void)imm; (void)pc; abort(); }
 void rt_udf(Cpu *c, uint64_t pc) { (void)c; (void)pc; abort(); }
 uint64_t rt_ticks(void) { return 0; }
-volatile int g_fnprof;
+volatile int g_fnprof, g_probe, g_probe_pending;
 void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0) { (void)addr, (void)lr, (void)x0; }
+void fn_enter_hook(uint64_t addr, Cpu *c) { (void)addr; (void)c; }
+void probe_after(uint64_t ret, Cpu *c) { (void)ret; (void)c; }
+void fnprof_edge(uint64_t site, uint64_t target, int kind) { (void)site; (void)target; (void)kind; }
 
 static void *map_at(uint64_t addr, size_t len) {
 #ifdef _WIN32

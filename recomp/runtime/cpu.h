@@ -56,10 +56,18 @@ typedef uint32_t __attribute__((aligned(1), may_alias)) u32u;
 typedef uint64_t __attribute__((aligned(1), may_alias)) u64u;
 typedef uint8_t __attribute__((may_alias)) u8a;
 
-// Function-entry profiler (runtime/fnprof.c, LARECOMP_FNPROF): one predictable branch per call when off.
+// Function-entry hooks: the profiler (runtime/fnprof.c, LARECOMP_FNPROF) and the probes (runtime/probe.c,
+// RECOMP_PROBE). One predictable branch per call when both are off.
 extern volatile int g_fnprof;
+extern volatile int g_probe;
 void fnprof_hit(uint64_t addr, uint64_t lr, uint64_t x0);
-#define FN_ENTER(a) do { if (__builtin_expect(g_fnprof, 0)) fnprof_hit(a, c->x[30], c->x[0]); } while (0)
+void fn_enter_hook(uint64_t addr, Cpu *c);
+#define FN_ENTER(a) do { if (__builtin_expect(g_fnprof | g_probe, 0)) fn_enter_hook(a, c); } while (0)
+// After every call site (tools/gen.py: bl and blr), its return address: a probed call that returns here is logged
+// (runtime/probe.c). One predictable branch per call while no probed call is pending.
+extern volatile int g_probe_pending;
+void probe_after(uint64_t ret, Cpu *c);
+#define FN_AFTER(ret) do { if (__builtin_expect(g_probe_pending, 0)) probe_after(ret, c); } while (0)
 // An indirect transfer leaving a function (tools/gen.py: blr = kind 1, a br out of the function = kind 2), its target
 // in c->pc: the call graph's exact indirect edges (runtime/fnprof.c, LARECOMP_FNPROF_GRAPH)
 void fnprof_edge(uint64_t site, uint64_t target, int kind);

@@ -164,7 +164,12 @@ void padscript_tick(void) {
     current = in ? frames[i] : i < 0 ? held : 0;
     if (i == nframes) {
         LOG("[pad] script done (%lld frames)\n", (long long)nframes);
-        if (getenv("RECOMP_PAD_EXIT")) { fflush(stderr); _exit(0); }  // (scripted runs that end with the script)
+        if (getenv("RECOMP_PAD_EXIT")) {  // (scripted runs that end with the script)
+            extern void probe_flush(void);  // (runtime/probe.c: the probe log, which _exit would lose)
+            probe_flush();
+            fflush(stderr);
+            _exit(0);
+        }
     }
 }
 

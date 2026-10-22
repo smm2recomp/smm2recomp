@@ -138,6 +138,8 @@ static void finish(const char *why) {
     LOG("[trace] end after %lld records (%s)\n", (long long)n, why);
     extern void fnprof_graph_write(void);  // (runtime/fnprof.c: a call graph being recorded ends with the trace)
     fnprof_graph_write();
+    extern void probe_flush(void);  // (runtime/probe.c: the probe log, which _exit would lose)
+    probe_flush();
     if (getenv("RECOMP_TRACE_EXIT") || getenv("LARECOMP_FNPROF_GRAPH_EXIT")) { fflush(stderr); _exit(0); }
 }
 
