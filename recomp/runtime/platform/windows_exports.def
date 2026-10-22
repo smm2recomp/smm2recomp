@@ -11,3 +11,6 @@ g_fnprof DATA
 smm2_player_hook
 smm2_mod_after
 smm1_extras_after
+smm2_relax_ok
+smm2_ocw_header
+guest_call_orig

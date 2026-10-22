@@ -92,6 +92,13 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
         static char jwt[2048];
         const char *t = token;
         uint32_t n = sizeof token - 1;
+        uint64_t shared;
+        if (net_account_shared(&shared)) {  // (ocw: none at all, as the console mod leaves the buffer)
+            if (b && b->size) memset((void *)(uintptr_t)b->addr, 0, b->size);
+            OUT(uint32_t, 0) = 0;
+            resp_size(resp, 4);
+            return true;
+        }
         bool nx = net_backend() == NET_BACKEND_NEXTENDO;
         if (nx && !prepare_nextendo()) LOG("[acc] Nextendo: no game token (offline, or the sign-in has ended)\n");
         if (net_real_sockets() && (n = (uint32_t)net_id_token(jwt, sizeof jwt))) t = jwt;
@@ -127,11 +134,14 @@ static void manager(Service *s, IpcReq *req, IpcResp *resp) {
     case 0: break;  // CheckAvailability
     case 1: {  // GetAccountId (the network service account; nextendo: the PID, known once a game token is)
         uint64_t id = 0x1234567890abcdefull;
-        if (net_backend() == NET_BACKEND_NEXTENDO) {
-            static bool asked;  // (asked before the ID token: one fetch, not one per call when offline)
-            if (!(id = nextendo_pid()) && !asked) asked = true, prepare_nextendo(), id = nextendo_pid();
-        } else if (net_real_sockets()) {
-            id = net_nsa_id();
+        // (ocw: net_account_shared gives the one id the console mod gives every OCW player, and no ID token)
+        if (!net_account_shared(&id)) {
+            if (net_backend() == NET_BACKEND_NEXTENDO) {
+                static bool asked;  // (asked before the ID token: one fetch, not one per call when offline)
+                if (!(id = nextendo_pid()) && !asked) asked = true, prepare_nextendo(), id = nextendo_pid();
+            } else if (net_real_sockets()) {
+                id = net_nsa_id();
+            }
         }
         OUT(uint64_t, 0) = id;
         resp_size(resp, 8);

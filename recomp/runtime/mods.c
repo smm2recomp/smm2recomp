@@ -25,4 +25,6 @@ bool mods_romfs_override(const char *path, char *out, size_t cap) {
 
 void mods_boot(void) {
     if (mods_dir()) LOG("[mods] %s\n", mods_dir());
+    extern void game_modules_loaded(void);  // (runtime/game_hooks.c: nothing)
+    game_modules_loaded();
 }

@@ -1,7 +1,7 @@
 // The online backend for SMM2 (runtime/net/netcfg.h): its settings live in smm2mods.ini with the mod's, under these
 // keys (environment variables win, as for the mod's own settings):
 //
-//   backend=ours | local-nex | nextendo     RECOMP_NET_BACKEND
+//   backend=ours | local-nex | nextendo | ocw   RECOMP_NET_BACKEND
 //   nex_test_server=<ip>                    RECOMP_NET_TEST_SERVER
 //   net_hosts=<name=ip;...>                 RECOMP_NET_HOSTS
 //   tls_trust=local-ca | any                RECOMP_NET_TLS_TRUST
@@ -9,6 +9,7 @@
 //   id_token_file=<path>                    RECOMP_NET_ID_TOKEN_FILE
 //   nex_token_file=<path>                   RECOMP_NET_NEX_TOKEN_FILE
 //   net_log=1                               RECOMP_NET_LOG
+//   net_log_data=1                          RECOMP_NET_LOG_DATA
 //
 //   course_world=mod | backend              RECOMP_MOD_COURSE_WORLD (settings.c)
 //
@@ -32,8 +33,8 @@ static const char *ini_path(void) { return getenv("RECOMP_MOD_INI") ? getenv("RE
 
 bool game_net_config(const char *key, char *out, size_t cap) {
     static const char *const keys[] = {"backend", "nex_test_server", "net_hosts", "tls_trust", "tls_ca",
-                                       "id_token_file", "nex_token_file", "net_log", "nextendo_server",
-                                       "nextendo_nat", "nextendo_tls_pin"};
+                                       "id_token_file", "nex_token_file", "net_log", "net_log_data",
+                                       "nextendo_server", "nextendo_nat", "nextendo_tls_pin"};
     bool known = false;
     for (size_t i = 0; i < sizeof keys / sizeof *keys; i++) known |= !strcmp(keys[i], key);
     FILE *f = known ? fopen(ini_path(), "r") : NULL;

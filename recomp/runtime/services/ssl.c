@@ -8,7 +8,8 @@
 // names are not used.
 //   tls_trust=local-ca  the server's certificate must chain to the local test CA (net/test-ca.pem, made by
 //                       tools/nex_test_server), and match the host name
-//   tls_trust=any       any certificate, and only towards a local address (the test server)
+//   tls_trust=any       any certificate, towards a local address (the test server) or, under the ocw backend, the
+//                       one host ocw-config.json names (net_tls_any_allowed; the default there)
 //   backend nextendo    pinned: Nextendo's game server presents a self-signed certificate, so the chain is not
 //                       checked (verify optional); after the handshake the certificate's public key
 //                       (SubjectPublicKeyInfo, DER) must hash (SHA-256) to the pin (net_tls_pin), or the connection is
@@ -103,7 +104,9 @@ static const char *errstr(int e) {
     return b;
 }
 
-// a few bytes of plaintext for the log (the WebSocket upgrade, then binary frames)
+// A few bytes of plaintext for the log (the WebSocket upgrade, then binary frames). The plaintext has its own
+// setting, off even with net_log=1: it is noisy, and the upgrade carries whatever the backend authenticates with.
+// net_log_redact takes the player id and any registered secret out of the line first.
 // RECOMP_NET_HEX=<file>: every TLS payload in full, as hex, appended to that file (protocol study: NEX's RMC). It holds
 // the session's tokens and the player's id: a private file, never shared.
 static void hex_dump(const char *dir, const SslConn *c, const uint8_t *p, size_t n) {
@@ -122,7 +125,7 @@ static void hex_dump(const char *dir, const SslConn *c, const uint8_t *p, size_t
 
 static void log_data(const char *dir, const SslConn *c, const uint8_t *p, size_t n) {
     if (n) hex_dump(dir, c, p, n);
-    if (!net_log_on() || !n) return;
+    if (!net_log_data() || !n) return;
     char line[200];
     size_t o = 0, show = n < 160 ? n : 160;
     for (size_t i = 0; i < show && o + 4 < sizeof line; i++) {
@@ -132,7 +135,7 @@ static void log_data(const char *dir, const SslConn *c, const uint8_t *p, size_t
     }
     line[o] = 0;
     char shown[sizeof line + 16];
-    net_log_redact(line, shown, sizeof shown);  // (NEX station URLs carry the player id: "PID=<hidden>")
+    net_log_redact(line, shown, sizeof shown);  // (the player id, and any registered token)
     LOG("[ssl] %s %s %zu bytes: %s%s\n", c->sni[0] ? c->sni : "?", dir, n, shown, n > show ? " ..." : "");
 }
 
@@ -186,8 +189,9 @@ static bool conn_setup(SslConn *c) {
         }
     }
     NetTrust trust = net_tls_trust();
-    if (trust == NET_TRUST_ANY && !net_ip_is_local(peer)) {
-        LOG("[ssl] %s (%s): \"accept any certificate\" is for local test servers only: refused\n", c->sni, pa);
+    if (trust == NET_TRUST_ANY && !net_tls_any_allowed(peer)) {
+        LOG("[ssl] %s (%s): \"accept any certificate\" is for local test servers and the ocw host only: refused\n",
+            c->sni, pa);
         return false;
     }
     mbedtls_ssl_init(&c->ssl);

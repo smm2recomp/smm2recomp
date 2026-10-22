@@ -17,6 +17,9 @@ MeloCafe-*.zip
 # Private reverse-engineering notes
 /research/
 
+# Local copies of other projects, for reference only (see CLAUDE.md): never part of this repository
+/_vendor/
+
 # macOS
 .DS_Store
 
