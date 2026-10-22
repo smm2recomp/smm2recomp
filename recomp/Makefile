@@ -28,6 +28,8 @@ else ifeq ($(UNAME),Linux)
 PLATFORM := linux
 else
 PLATFORM := macos
+# (macOS: Apple silicon or Intel - built natively, there is no cross target)
+ARCH     := $(patsubst arm64,aarch64,$(shell uname -m))
 endif
 
 GAME     ?= smm2
@@ -73,6 +75,9 @@ CROSS_CXX := $(NDK_BIN)/clang++ --target=aarch64-linux-android$(ANDROID_API)
 B        := build/$(GAME)-$(TARGET)
 GENSIMD  := --simd asm
 else ifneq ($(TARGET),)
+ifeq ($(PLATFORM),macos)
+$(error macOS has no cross target - build it natively: make -C recomp smm2)
+endif
 # zig cc / c++ for the target; the generated code depends only on the CPU's FP/SIMD lowering (asm on aarch64, C on
 # x86-64), so targets share it: generated/<game> (aarch64, as macOS) or generated/<game>-c (x86-64)
 ZIG      ?= $(firstword $(wildcard build/zig/zig) zig)
@@ -91,6 +96,15 @@ ifneq ($(ARCH),$(HOSTARCH))
 CROSS    := --target=$(ARCH)-linux-gnu $(if $(SYSROOT),--sysroot=$(SYSROOT))
 GEN      := generated/$(GAME)-$(ARCH)
 B        := build/$(GAME)-$(ARCH)
+endif
+GENSIMD  := --simd $(if $(filter aarch64,$(ARCH)),asm,c)
+else ifeq ($(PLATFORM),macos)
+# macOS: Apple's clang, Metal. Built natively (no cross target): the game code's FP/SIMD lowering follows the host -
+# the asm one (the guest's own NEON, bit-exact) on Apple silicon, the portable C one on x86-64 (as on Windows / Linux x64).
+ifeq ($(ARCH),x86_64)
+GEN      := generated/$(GAME)-c
+# AVX2 + FMA for the lifted FP/SIMD code (checked at startup)
+GENARCH  ?= -march=x86-64-v3
 endif
 GENSIMD  := --simd $(if $(filter aarch64,$(ARCH)),asm,c)
 endif
@@ -156,8 +170,11 @@ GAMELIB  :=
 EXE_GAME_OBJ := $(GEN_OBJ)  # (linked in)
 APP      := $(B)/SMM2Recomp.app
 else ifeq ($(PLATFORM),macos)
-SDL      := $(or $(DEPS),/opt/homebrew/opt/sdl3)
-FFMPEG   := $(or $(DEPS),/opt/homebrew/opt/ffmpeg)
+# (Intel's Homebrew is /usr/local, Apple silicon's is /opt/homebrew)
+HOMEBREW := $(if $(filter x86_64,$(ARCH)),/usr/local,/opt/homebrew)
+SDL      := $(or $(DEPS),$(HOMEBREW)/opt/sdl3)
+FFMPEG   := $(or $(DEPS),$(HOMEBREW)/opt/ffmpeg)
+GENFLAGS += $(GENARCH)
 EXE      := $(B)/$(GAME_ID)recomp
 DEPINC   := -I$(SDL)/include -I$(FFMPEG)/include
 LDFLAGS  := -L$(SDL)/lib -lSDL3 -Wl,-rpath,$(SDL)/lib $(if $(FFMPEG_LIBS),-L$(FFMPEG)/lib $(FFMPEG_LIBS) -Wl$(comma)-rpath$(comma)$(FFMPEG)/lib) \
@@ -241,7 +258,7 @@ MBEDTLS_OBJ := $(patsubst $(MBEDTLS)/library/%.c,$(B)/mbedtls/%.o,$(wildcard $(M
 # The course server inside the app (core/crates/embed, runtime/net/embed_server.h): linked when its library is built
 # (`make embed-server`: cargo; Windows / Linux cross builds compile its C parts with zig, tools/zigcc.sh) or
 # EMBED_SERVER=1; a build never needs Rust otherwise.
-EMBED_TRIPLE := $(if $(filter ios,$(PLATFORM)),aarch64-apple-ios,$(if $(filter iossim,$(PLATFORM)),aarch64-apple-ios-sim,$(if $(filter macos,$(PLATFORM)),aarch64-apple-darwin)))
+EMBED_TRIPLE := $(if $(filter ios,$(PLATFORM)),aarch64-apple-ios,$(if $(filter iossim,$(PLATFORM)),aarch64-apple-ios-sim,$(if $(filter macos,$(PLATFORM)),$(if $(filter x86_64,$(ARCH)),x86_64-apple-darwin,aarch64-apple-darwin))))
 EMBED_TRIPLE := $(or $(EMBED_TRIPLE),$(if $(filter windows,$(PLATFORM)),x86_64-pc-windows-gnu),$(if $(filter linux,$(PLATFORM)),$(ARCH)-unknown-linux-gnu))
 EMBED_LIB := $(if $(EMBED_TRIPLE),../core/target/$(EMBED_TRIPLE)/release/libmmk_embed.a)
 EMBED_SERVER ?= $(if $(wildcard $(EMBED_LIB)),1,0)

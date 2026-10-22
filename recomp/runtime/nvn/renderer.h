@@ -10,6 +10,8 @@ MTLPixelFormat renderer_texture_pixel_format(NvnTexture *t);  // (no texture mad
 bool renderer_format_alpha_one(uint32_t nvn_format);
 extern id<MTLBuffer> g_guest_buffer;
 extern uint64_t g_guest_buffer_base;
+// The heap buffer holding a guest address (the heap is wrapped in <= 2 GiB chunks) and its offset, or nil.
+id<MTLBuffer> guest_buffer_chunk(uint64_t addr, uint64_t size, uint64_t *offset);
 #endif
 #include <SDL3/SDL_events.h>
 

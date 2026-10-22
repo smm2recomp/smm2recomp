@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tools/fetch_python.sh <target>   (windows-x86_64 | linux-x86_64 | linux-aarch64 | macos-aarch64)
+# usage: tools/fetch_python.sh <target>   (windows-x86_64 | linux-x86_64 | linux-aarch64 | macos-aarch64 | macos-x86_64)
 # The Python the player packages bring along: the game code generator (tools/gen.py) and the setup scripts
 # (games/smm2/setup.py, sysdata.py) run with it, so players install nothing. A relocatable CPython 3.12
 # (python-build-standalone: PSF license, with its own components' licenses) plus the generator's three packages
@@ -13,6 +13,7 @@ REL=20260924
 VER=3.12.14
 case "$TARGET" in
     macos-aarch64)  T=aarch64-apple-darwin      SHA=c2edb321cd32ec2b170df208db0446dccc4398db602ca27cf2079098fb1f7d9d PLAT=macosx_11_0_arm64 ;;
+    macos-x86_64)   T=x86_64-apple-darwin       SHA=7ea9761b9069c10b9a20531d568645849d604c59e9c7f11f6659f1e1790c968e PLAT=macosx_11_0_x86_64 ;;
     linux-aarch64)  T=aarch64-unknown-linux-gnu SHA=c8499b61252c433280f134df954464d19811527b31cb920c35fc6967c1222e35 PLAT=manylinux_2_17_aarch64 ;;
     linux-x86_64)   T=x86_64-unknown-linux-gnu  SHA=269b2c99e4db15b242bf01832f4fea1e8f1a664f273cff519393f296e9820b41 PLAT=manylinux_2_17_x86_64 ;;
     windows-x86_64) T=x86_64-pc-windows-msvc    SHA=c5bf8edfe858c1df9891be498b5bbc8761d383df5b9790658b088fea4870433a PLAT=win_amd64 ;;

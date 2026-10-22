@@ -113,6 +113,9 @@ extern int maxwell_dbg_reg;
 // Debug: the vertex shader at maxwell_dbg_vs writes each vertex's position to buffer 18 (slot iid*8+vid).
 extern const uint8_t *maxwell_dbg_vs;
 #define DBG_VS_BUFFER_INDEX 29
+// NVN texture channel swizzle, one uint4 per texture slot (NVN_TEXTURE_SWIZZLE_*: 0 zero, 1 one, 2-5 red/green/blue/
+// alpha): the shaders apply it themselves where the driver has no swizzle texture views (Intel Macs' NVIDIA driver).
+#define TSWZ_BUFFER_INDEX 26
 
 // code: shader binary (with the 0x50-byte SPH header for graphics stages)
 ShaderInfo *maxwell_translate(const uint8_t *code, size_t max_size, int stage, const ShaderKey *key);

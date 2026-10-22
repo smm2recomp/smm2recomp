@@ -9,6 +9,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 MIN=${MACOS_MIN:-14.0}
+# the architecture to build for: this machine's (the app is built natively: Apple silicon or Intel)
+case "$(uname -m)" in arm64) ARCH=arm64;; *) ARCH=x86_64;; esac
 P=$PWD/build/deps
 S=$P/src
 mkdir -p "$S" "$P/bin" "$P/lib"
@@ -27,7 +29,7 @@ fetch https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.
 if [ ! -f "$P/lib/libSDL3.0.dylib" ]; then
     unpack SDL3-3.4.18.tar.gz sdl
     cmake -S "$S/sdl" -B "$S/sdl/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$P" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN" -DCMAKE_OSX_ARCHITECTURES=arm64 -DSDL_SHARED=ON -DSDL_STATIC=OFF \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET="$MIN" -DCMAKE_OSX_ARCHITECTURES=$ARCH -DSDL_SHARED=ON -DSDL_STATIC=OFF \
           -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_INSTALL_DOCS=OFF
     cmake --build "$S/sdl/build" -j"$JOBS" && cmake --install "$S/sdl/build"
 fi
@@ -36,7 +38,7 @@ if [ "${WITH_FFMPEG:-0}" = 1 ] && [ ! -f "$P/lib/libavcodec.dylib" ]; then
     fetch https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz \
           8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e ffmpeg-9.0.2.tar.xz
     unpack ffmpeg-9.0.2.tar.xz ffmpeg
-    (cd "$S/ffmpeg" && ./configure --prefix="$P" --cc=clang --arch=arm64 --enable-shared --disable-static \
+    (cd "$S/ffmpeg" && ./configure --prefix="$P" --cc=clang --arch=$ARCH --enable-shared --disable-static \
         --extra-cflags="-mmacosx-version-min=$MIN" --extra-ldflags="-mmacosx-version-min=$MIN" \
         --disable-autodetect --disable-programs --disable-doc --disable-network --disable-avdevice --disable-avfilter \
         --disable-swresample --disable-everything \

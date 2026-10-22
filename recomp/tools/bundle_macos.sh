@@ -1,6 +1,7 @@
 #!/bin/bash
 # usage: tools/bundle_macos.sh <exe>   (make app-macos does this)
-# The macOS player package: build/SMM2Recomp.app, zipped as dist/SMM2Recomp-macos-arm64.zip.
+# The macOS player package: build/SMM2Recomp.app, zipped as dist/SMM2Recomp-macos-<arch>.zip (arm64 or x86_64: the
+# app is built natively, for this machine's architecture).
 #   Contents/MacOS/smm2recomp      the runtime with its setup screen (runtime/ui/launcher.mm)
 #   Contents/Frameworks/           every non-system dylib it loads (SDL3, from build/deps: tools/build_deps_macos.sh),
 #                                  load paths rewritten to @rpath
@@ -23,6 +24,11 @@ VERSION=${RECOMP_VERSION:-$(git describe --tags --match 'v[0-9]*' 2>/dev/null ||
 SHORT=$(echo "$VERSION" | sed -n 's/^v\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')  # (CFBundleShortVersionString: digits)
 SHORT=${SHORT:-0.0.0}
 IDENTITY=${RECOMP_MACOS_IDENTITY:--}
+# the architecture: this machine's (the app is built natively: Apple silicon or Intel)
+case "$(uname -m)" in
+    arm64) ARCH=arm64; TARGET=macos-aarch64; ZT=aarch64-macos ;;
+    *)    ARCH=x86_64; TARGET=macos-x86_64; ZT=x86_64-macos ;;
+esac
 [ -x "$EXE" ] || { echo "no $EXE (make app-macos)"; exit 1; }
 # the app must hold no game code: that's built on the player's machine (grep without -q: with pipefail, nm cut off
 # early would hide a match)
@@ -33,9 +39,9 @@ C="$APP/Contents"
 mkdir -p "$C/MacOS" "$C/Frameworks" "$C/Resources"
 cp "$EXE" "$C/MacOS/$ID""recomp"
 strip -S "$C/MacOS/${ID}recomp"  # (debug-map entries only: the symbols crash reports name functions by stay)
-stage_common "$C/Resources" macos-aarch64 aarch64-macos
+stage_common "$C/Resources" "$TARGET" "$ZT"
 [ -f "$DEPS/share/licenses/SDL3/LICENSE.txt" ] && cp "$DEPS/share/licenses/SDL3/LICENSE.txt" "$C/Resources/licenses/LICENSE-SDL3.txt"
-write_readme "$C/Resources/README.txt" macos-aarch64 "$VERSION"
+write_readme "$C/Resources/README.txt" "$TARGET" "$VERSION"
 
 # ---- dylibs: copy every non-system dependency, recursively; point all references at @rpath/<name>
 is_system() { case "$1" in /usr/lib/*|/System/*) return 0;; esac; return 1; }
@@ -108,7 +114,7 @@ cat > "$C/Info.plist" <<EOF
     <key>CFBundleVersion</key><string>$SHORT</string>
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>LSMinimumSystemVersion</key><string>$MIN</string>
-    <key>LSArchitecturePriority</key><array><string>arm64</string></array>
+    <key>LSArchitecturePriority</key><array><string>$ARCH</string></array>
     <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>GCSupportsControllerUserInteraction</key><true/>
@@ -129,7 +135,7 @@ codesign --verify --strict "$APP"
 
 python3 ../scripts/check_package.py "$APP"
 mkdir -p dist
-ZIP=dist/SMM2Recomp-macos-arm64.zip
+ZIP=dist/SMM2Recomp-macos-$ARCH.zip
 rm -f "$ZIP"
 # no extended attributes: ditto would store them as ._ files, which any unzip but Finder's leaves inside the app,
 # breaking its signature

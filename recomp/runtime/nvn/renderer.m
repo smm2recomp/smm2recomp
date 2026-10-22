@@ -815,10 +815,12 @@ static void ring_reset(void) { ring_off = 0; }
 
 // Bind guest memory [addr, addr+size) as a buffer: zero-copy inside the heap, copied otherwise.
 static void bind_guest(id<MTLRenderCommandEncoder> e, bool vertex_stage, uint64_t addr, uint64_t size, int index) {
-    if (addr >= HEAP_BASE && addr + size <= HEAP_BASE + HEAP_MAX && (addr & 3) == 0) {
+    uint64_t goff;
+    id<MTLBuffer> gbuf = (addr & 3) == 0 ? guest_buffer_chunk(addr, size, &goff) : nil;
+    if (gbuf) {
         gpu_read_mark(addr, size);
-        if (vertex_stage) [e setVertexBuffer:g_guest_buffer offset:addr - HEAP_BASE atIndex:index];
-        else [e setFragmentBuffer:g_guest_buffer offset:addr - HEAP_BASE atIndex:index];
+        if (vertex_stage) [e setVertexBuffer:gbuf offset:goff atIndex:index];
+        else [e setFragmentBuffer:gbuf offset:goff atIndex:index];
         return;
     }
     uint64_t off = ring_alloc((void *)(uintptr_t)addr, size);
@@ -1201,9 +1203,21 @@ static void pipeline_cache_merge(int upto, int into) {  // (on g_archive_q)
         n, lost, now_ms() - t0);
 }
 
+// Metal binary archives are serialized for a target GPU architecture that the legacy driver of Intel Macs' NVIDIA GPUs
+// doesn't have: saving one there aborts ("MTLLoader sliceIDForDevice: failed assertion Target device architecture is
+// nil"), so those machines keep no pipeline cache (the shaders are still compiled once into cache/shaders).
+static bool pipeline_archives_usable(void) {
+    static int ok = -1;
+    if (ok < 0) {
+        ok = [dev supportsFamily:MTLGPUFamilyMac2] ? 1 : 0;
+        if (!ok) LOG("[shader] this driver has no Metal binary archives: pipelines are compiled on each run\n");
+    }
+    return ok == 1;
+}
+
 static void pipeline_cache_open(void) {
     static int done;
-    if (done++ || getenv("LARECOMP_NO_PIPELINE_CACHE")) return;
+    if (done++ || getenv("LARECOMP_NO_PIPELINE_CACHE") || !pipeline_archives_usable()) return;
     mkdir("cache", 0755);
     mkdir("cache/pipelines", 0755);
     double t0 = now_ms();
@@ -1649,12 +1663,35 @@ static MTLTextureType mtl_type_for(int t) {
     }
 }
 
+// The texture view with a channel swizzle is declared since macOS 10.15, but Intel Macs' NVIDIA driver (Metal 2 only)
+// does not implement it (nor the descriptor's swizzle): there the translated shaders apply it instead, from the table
+// renderer_swizzle_row fills (see TSWZ_BUFFER_INDEX).
+static bool swizzle_view_supported(void) {
+    static int ok = -1;
+    if (ok < 0) {
+        MTLTextureDescriptor *d = [MTLTextureDescriptor new];
+        d.pixelFormat = MTLPixelFormatRGBA8Unorm;
+        d.width = d.height = 1;
+        id<MTLTexture> t = [dev newTextureWithDescriptor:d];
+        ok = [t respondsToSelector:@selector(newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:)] ? 1 : 0;
+        if (!ok) LOG("[tex] this driver has no swizzle texture views: the shaders apply them\n");
+    }
+    return ok == 1;
+}
+
+// The channel swizzle a bound texture is sampled with: the view's if it sets one, else the texture's (NVN's enum,
+// the same values as MTLTextureSwizzle). Returns false when none was ever set (identity).
+static bool bind_swizzle(NvnTexture *t, const NvnTextureView *v, bool has_view, uint8_t c[4]) {
+    const uint8_t *sw = (has_view && (v->setmask & 8)) ? v->swizzle : t->swizzle;
+    for (int i = 0; i < 4; i++) c[i] = sw[i] <= 5 ? sw[i] : (uint8_t)(2 + i);
+    return c[0] || c[1] || c[2] || c[3];
+}
+
 // NVN texture/view component swizzle (same enum values as MTLTextureSwizzle), applied as a view.
 static id<MTLTexture> apply_swizzle(id<MTLTexture> tex, NvnTexture *t, const NvnTextureView *v, bool has_view) {
-    const uint8_t *sw = (has_view && (v->setmask & 8)) ? v->swizzle : t->swizzle;
     uint8_t c[4];
-    for (int i = 0; i < 4; i++) c[i] = sw[i] <= 5 ? sw[i] : (uint8_t)(2 + i);
-    if (!c[0] && !c[1] && !c[2] && !c[3]) return tex;  // never set: identity
+    if (!bind_swizzle(t, v, has_view, c)) return tex;  // never set: identity
+    if (!swizzle_view_supported()) return tex;  // (the shader applies it there: renderer_swizzle_row)
     if (renderer_format_alpha_one(t->format))
         for (int i = 0; i < 4; i++) if (c[i] == MTLTextureSwizzleAlpha) c[i] = MTLTextureSwizzleOne;
     if (c[0] == 2 && c[1] == 3 && c[2] == 4 && c[3] == (renderer_format_alpha_one(t->format) ? 1 : 5)) return tex;
@@ -1668,6 +1705,27 @@ static id<MTLTexture> apply_swizzle(id<MTLTexture> tex, NvnTexture *t, const Nvn
                                           swizzle:chans];
     });
     return view;
+}
+
+// What the shader must apply for a bound texture (TSWZ_BUFFER_INDEX, write_tex_result in maxwell/translate.c): identity
+// where the swizzle is a texture view, the real channels where the driver has no swizzle views (Intel Macs' NVIDIA
+// driver, Metal 2 only: its textures answer neither the view with a swizzle nor the descriptor's swizzle).
+static void renderer_swizzle_row(NvnTexture *t, const NvnTextureView *v, bool has_view, uint32_t row[4]) {
+    row[0] = MTLTextureSwizzleRed;
+    row[1] = MTLTextureSwizzleGreen;
+    row[2] = MTLTextureSwizzleBlue;
+    row[3] = MTLTextureSwizzleAlpha;
+    if (!t || swizzle_view_supported() || renderer_format_is_depth(t->format)) return;
+    uint8_t c[4];
+    if (!bind_swizzle(t, v, has_view, c)) return;
+    if (c[0] == 2 && c[1] == 3 && c[2] == 4 && c[3] == 5) return;  // identity: nothing to do
+    for (int i = 0; i < 4; i++) row[i] = c[i];
+    static uint32_t seen[16];  // (one line per distinct swizzle, not per draw)
+    static int nseen;
+    uint32_t key = c[0] | c[1] << 8 | c[2] << 16 | (uint32_t)c[3] << 24;
+    for (int i = 0; i < nseen; i++) if (seen[i] == key) return;
+    if (nseen < 16) seen[nseen++] = key;
+    LOG("[tex] shader swizzle %d%d%d%d (%ux%u fmt %#x)\n", c[0], c[1], c[2], c[3], t->width, t->height, t->format);
 }
 
 // Upload helper: a separate command buffer, committed now so it runs before the current pass.
@@ -1800,6 +1858,8 @@ static void resolve_feedback(Prog *pr) {
 
 static void bind_textures(int stage, ShaderInfo *si) {
     if (stage == 1) draw_bottle = draw_heart = 0, draw_item_cursor = false;
+    uint32_t swz[64][4];  // (the shader's channel swizzles: see renderer_swizzle_row)
+    for (int i = 0; i < si->ntex && i < 64; i++) renderer_swizzle_row(NULL, NULL, false, swz[i]);
     for (int i = 0; i < si->ntex; i++) {
         ShaderTexture *st_ = &si->tex[i];
         int slot = ((int)st_->handle_offset - 0x20) / 8;  // 64-bit handles from offset 0x20
@@ -1815,6 +1875,7 @@ static void bind_textures(int stage, ShaderInfo *si) {
         if (h && st.tpool && tic < (uint32_t)st.tpool->count) {
             NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
             if (e->tex) tex = sampled_texture(e->tex, &e->view, e->has_view, st_->type);
+            if (i < 64) renderer_swizzle_row(e->tex, &e->view, e->has_view, swz[i]);
             if (g_debug_frame && e->tex) LOG("[tx] stage %d tex %d slot %d: nvn %p mtl %p (%lux%lu fmt %lu type %lu) view %d (mask %#x swz %d%d%d%d) tex swz %d%d%d%d mtl swz %08x\n", stage, i, slot, (void *)e->tex, (__bridge void *)tex, (unsigned long)tex.width, (unsigned long)tex.height, (unsigned long)tex.pixelFormat, (unsigned long)tex.textureType, e->has_view, e->view.setmask, e->view.swizzle[0], e->view.swizzle[1], e->view.swizzle[2], e->view.swizzle[3], e->tex->swizzle[0], e->tex->swizzle[1], e->tex->swizzle[2], e->tex->swizzle[3], (unsigned)(tex.swizzle.red | tex.swizzle.green << 8 | tex.swizzle.blue << 16 | tex.swizzle.alpha << 24));
             if (e->tex && stage == 1) {
                 extern int renderer_texpatch_of(NvnTexture *t);
@@ -1899,6 +1960,10 @@ static void bind_textures(int stage, ShaderInfo *si) {
         }
         if (stage == 0) { [enc setVertexTexture:tex atIndex:i]; [enc setVertexSamplerState:smp atIndex:i]; }
         else { [enc setFragmentTexture:tex atIndex:i]; [enc setFragmentSamplerState:smp atIndex:i]; }
+    }
+    if (si->ntex) {
+        if (stage == 0) [enc setVertexBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
+        else [enc setFragmentBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
     }
 }
 
@@ -2098,6 +2163,8 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
     CST("gmem");
     if (si->uses_gmem) [ce setBuffer:g_guest_buffer offset:0 atIndex:GMEM_BUFFER_INDEX];
     CST("textures");
+    uint32_t swz[64][4];
+    for (int i = 0; i < si->ntex && i < 64; i++) renderer_swizzle_row(NULL, NULL, false, swz[i]);
     for (int i = 0; i < si->ntex; i++) {
         ShaderTexture *st_ = &si->tex[i];
         int slot = ((int)st_->handle_offset - 0x20) / 8;
@@ -2109,6 +2176,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
         if (h && st.tpool && tic < (uint32_t)st.tpool->count) {
             NvnTexEntry *e = &((NvnTexEntry *)st.tpool->entries)[tic];
             if (e->tex) tex = sampled_texture(e->tex, &e->view, e->has_view, st_->type);
+            if (i < 64) renderer_swizzle_row(e->tex, &e->view, e->has_view, swz[i]);
             if (e->tex && i < 64) renderer_texture_scale(e->tex, &tex_sc[0][i][0], &tex_sc[0][i][1]);
             for (int k = 0; k < nfeedback; k++)
                 if (e->tex == feedback_tex[k]) {
@@ -2128,6 +2196,7 @@ static void dispatch_compute(uint32_t gx, uint32_t gy, uint32_t gz) {
         for (int i = 0; i < si->ntex && i < 64; i++) { rs[1 + i][0] = tex_sc[0][i][0]; rs[1 + i][1] = tex_sc[0][i][1]; }
         [ce setBytes:rs length:(NSUInteger)(1 + si->ntex) * 16 atIndex:RSCALE_BUFFER_INDEX];
     }
+    if (si->ntex) [ce setBytes:swz length:(NSUInteger)si->ntex * 16 atIndex:TSWZ_BUFFER_INDEX];
     CST("dispatch");
     extern bool g_debug_frame;
     if (g_debug_frame) {
@@ -2982,8 +3051,7 @@ static void draw(CmdRec *r, bool indexed) {
             uint32_t isz = itype == 1 ? 2 : 4;
             id<MTLBuffer> ib;
             uint64_t ioff;
-            if (iaddr >= HEAP_BASE && iaddr + (uint64_t)count * isz <= HEAP_BASE + HEAP_MAX && (iaddr % isz) == 0) {
-                ib = g_guest_buffer; ioff = iaddr - HEAP_BASE;
+            if ((iaddr % isz) == 0 && (ib = guest_buffer_chunk(iaddr, (uint64_t)count * isz, &ioff))) {
                 gpu_read_mark(iaddr, (uint64_t)count * isz);
             } else {
                 ioff = ring_alloc((void *)(uintptr_t)iaddr, (uint64_t)count * isz); ib = ring;
@@ -3190,11 +3258,15 @@ static void copy_texture_to_buffer(const TexRefRec *src, uint64_t dst) {
     id<MTLBlitCommandEncoder> b = [cb() blitCommandEncoder];
     if (renderer_pixel_format_bytes(tex.pixelFormat, fi->bpb) != fi->bpb) { [b endEncoding]; return; }
     bool array = tex.textureType == MTLTextureType2DArray || tex.textureType == MTLTextureTypeCube;
-    for (int z = 0; z < (array ? rg[5] : 1); z++)
-        [b copyFromTexture:tex sourceSlice:array ? rg[2] + z : 0 sourceLevel:level
-              sourceOrigin:MTLOriginMake(rg[0], rg[1], array ? 0 : rg[2])
-                sourceSize:MTLSizeMake(rg[3], rg[4], array ? 1 : rg[5]) toBuffer:g_guest_buffer
-         destinationOffset:dst - HEAP_BASE + (uint64_t)z * img destinationBytesPerRow:row destinationBytesPerImage:img];
+    for (int z = 0; z < (array ? rg[5] : 1); z++) {
+        uint64_t boff;
+        id<MTLBuffer> bbuf = guest_buffer_chunk(dst + (uint64_t)z * img, img, &boff);
+        if (bbuf)
+            [b copyFromTexture:tex sourceSlice:array ? rg[2] + z : 0 sourceLevel:level
+                  sourceOrigin:MTLOriginMake(rg[0], rg[1], array ? 0 : rg[2])
+                    sourceSize:MTLSizeMake(rg[3], rg[4], array ? 1 : rg[5]) toBuffer:bbuf
+             destinationOffset:boff destinationBytesPerRow:row destinationBytesPerImage:img];
+    }
     [b endEncoding];
     renderer_flush();  // the CPU may read the result right after the fence
 }

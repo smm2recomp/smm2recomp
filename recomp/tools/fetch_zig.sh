@@ -16,6 +16,7 @@ NAME=zig-$TARGET-$VER
 # sha256 of each release archive (ziglang.org/download/index.json; checked against it when pinned)
 case "$TARGET" in
     aarch64-macos)  SHA=b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a ;;
+    x86_64-macos)   SHA=4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6 ;;
     x86_64-linux)   SHA=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 ;;
     aarch64-linux)  SHA=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8 ;;
     x86_64-windows) SHA=b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428 ;;

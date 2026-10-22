@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tools/build_hactool.sh <target>   (windows-x86_64 | linux-x86_64 | linux-aarch64 | macos-aarch64)
+# usage: tools/build_hactool.sh <target>   (windows-x86_64 | linux-x86_64 | linux-aarch64 | macos-aarch64 | macos-x86_64)
 # hactool (SciresM, ISC license; its bundled mbedtls: Apache-2.0) for the player packages: the setup screen
 # (runtime/ui/launcher.mm) runs it on the player's own NSP / XCI and firmware with the player's own prod.keys
 # (games/smm2/setup.py, sysdata.py). Built from the pinned release's source with zig cc for the target, so every
@@ -15,6 +15,7 @@ case "$TARGET" in
     linux-x86_64)   ZT=x86_64-linux-gnu.2.17 EXE= ;;
     linux-aarch64)  ZT=aarch64-linux-gnu.2.17 EXE= ;;
     macos-aarch64)  ZT=aarch64-macos.13.0-none EXE= ;;
+    macos-x86_64)   ZT=x86_64-macos.13.0-none EXE= ;;
     *) echo "build_hactool.sh: no target $TARGET"; exit 1 ;;
 esac
 DL=build/dl
@@ -69,7 +70,7 @@ for c in "$SRC"/mbedtls/library/*.c "$SRC"/*.c; do
     if [ ${#pids[@]} -ge 8 ]; then wait "${pids[0]}"; pids=("${pids[@]:1}"); fi
 done
 for p in "${pids[@]}"; do wait "$p"; done
-"$ZIG" cc -target "$ZT" -o "$OUT/hactool$EXE" "${objs[@]}" $([ "$TARGET" = macos-aarch64 ] || echo -s) \
+"$ZIG" cc -target "$ZT" -o "$OUT/hactool$EXE" "${objs[@]}" $([[ "$TARGET" == macos-* ]] || echo -s) \
     $([ "$TARGET" = windows-x86_64 ] && echo -ladvapi32)
 rm -rf "$OUT/obj" "$OUT"/*.lib "$OUT"/*.pdb  # (zig leaves an import library next to a Windows exe)
 { cat "$SRC/LICENSE"; echo; echo "hactool $VER: https://github.com/SciresM/hactool (built from the release's source)."

@@ -29,6 +29,7 @@
 #include "nvn.h"
 #include "renderer.h"
 #include "texpatch.h"
+#include "astc.h"
 #include "bcsoft.h"
 
 static id<MTLDevice> dev;
@@ -38,8 +39,13 @@ static SDL_Window *window;
 static atomic_bool ui_ready;
 static id<MTLRenderPipelineState> present_pipe;
 static id<MTLSamplerState> present_sampler;
-id<MTLBuffer> g_guest_buffer;  // wraps the guest heap so GPU addresses map to buffer offsets
+id<MTLBuffer> g_guest_buffer;  // the guest heap's first chunk (GPU addresses map to buffer offsets)
 uint64_t g_guest_buffer_base;
+#define GUEST_CHUNK_MAX (2ull << 30)  // the NVIDIA/MetalOld driver reads zeros from no-copy buffers over 2 GiB
+static id<MTLBuffer> g_guest_chunks[4];
+static int g_guest_chunk_count;
+static uint64_t g_guest_chunk_len;
+static uint64_t g_guest_wrapped;
 
 // ================================================================== formats
 typedef struct { MTLPixelFormat pf; uint8_t expand_rgb; uint8_t force_alpha_one; } MtlFormat;
@@ -47,8 +53,14 @@ typedef struct { MTLPixelFormat pf; uint8_t expand_rgb; uint8_t force_alpha_one;
 // GPUs without BC textures (the iOS Simulator, older iPhones; RECOMP_BC_SOFT=1 to try it on a Mac): BC1-7 are
 // decoded on the CPU at upload (runtime/nvn/bcsoft.c) into RGBA8 / RGBA8 snorm / RGBA16F textures. Set in backend_init.
 static bool g_bc_soft;
+// GPUs without ASTC textures (Intel Macs' NVIDIA / AMD drivers, Metal 2 only; RECOMP_ASTC_SOFT=1 to try it on a Mac):
+// ASTC is decoded on the CPU at upload (runtime/nvn/astc.c) into RGBA8, as the Vulkan path does. Creating an ASTC
+// texture there aborts inside Metal ("invalid pixelFormat 204", the course menu's thumbnails, 2026-10-22).
+static bool g_astc_soft;
+static bool astc_format(uint32_t f) { return f >= 0x79 && f <= 0x94; }
 static MtlFormat mtl_format_hw(uint32_t f);
 static MtlFormat mtl_format(uint32_t f) {
+    if (g_astc_soft && astc_format(f)) return (MtlFormat){f >= 0x87 ? MTLPixelFormatRGBA8Unorm_sRGB : MTLPixelFormatRGBA8Unorm};
     int k = g_bc_soft ? bcsoft_kind(f) : 0;
     if (!k) return mtl_format_hw(f);
     bool srgb = f == 0x45 || f == 0x46 || f == 0x47 || f == 0x48 || f == 0x4E;
@@ -611,6 +623,19 @@ static void upload_texture(NvnTexture *t, TexBackend *b, id<MTLBlitCommandEncode
                 out_row = l.w * ts;
                 out_h = l.h;
             }
+            if (g_astc_soft && astc_format(t->format) && fi->bpb == 16) {  // ASTC on the CPU (see g_astc_soft)
+                static int astc_log;
+                if (!astc_log++) LOG("[metal] ASTC %#x %ux%u decoded on the CPU\n", t->format, l.w, l.h);
+                uint32_t d = l.d ? l.d : 1;
+                uint64_t bslice = (uint64_t)row * l.hb;  // (one depth slice of blocks)
+                data = malloc((uint64_t)l.w * l.h * d * 4);
+                for (uint32_t z = 0; z < d; z++)
+                    astc_decode_ldr(lin + z * bslice, l.w, l.h, fi->bw, fi->bh, t->format >= 0x87, data + (uint64_t)z * l.w * l.h * 4);
+                free(lin);
+                lin = data;
+                out_row = l.w * 4;
+                out_h = l.h;
+            }
             static int bc5log;  // LARECOMP_LOG_BC5: endpoint bytes of BC5 (0x4B/0x4C) textures (unorm ~128 vs snorm ~0)
             if ((t->format == 0x4B || t->format == 0x4C) && lv == 0 && bc5log < 12 && getenv("LARECOMP_LOG_BC5")) {
                 bc5log++;
@@ -705,23 +730,48 @@ static const char *present_src =
     "  float2 p = float2((vid << 1) & 2, vid & 2);\n"
     "  V o; o.pos = float4(p * 2.0 - 1.0, 0, 1);\n"
     "  float2 uv = float2(p.x, pv[0].x > 0.5 ? p.y : 1.0 - p.y); o.uv = pv[1].xy + uv * pv[1].zw; return o; }\n"
-    "fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) {\n"
+    "fragment float4 fs(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],\n"
+    "                   constant float4 &solid [[buffer(1)]]) {\n"
+    "  if (solid.w > 0.5) return solid;\n"  // LARECOMP_PRESENT_SOLID: draw a flat color (present-path test)
     "  return float4(t.sample(s, in.uv).rgb, 1.0); }\n"
     "fragment float4 fs_alpha(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) {\n"
     "  return float4(float3(t.sample(s, in.uv).a), 1.0); }\n";
 
-// The guest heap as one Metal buffer. A device whose buffers can't be that large (iOS) gets as much as it allows,
-// from the heap's start, where the game's memory pools are; the log says so.
-static id<MTLBuffer> wrap_guest_heap(void) {
-    id<MTLBuffer> b = [dev newBufferWithBytesNoCopy:(void *)HEAP_BASE length:HEAP_MAX
-                                            options:MTLResourceStorageModeShared deallocator:nil];
-    if (b) return b;
-    uint64_t len = (uint64_t)dev.maxBufferLength & ~0x3fffull;
-    if (len >= HEAP_MAX) return nil;
-    b = [dev newBufferWithBytesNoCopy:(void *)HEAP_BASE length:len options:MTLResourceStorageModeShared deallocator:nil];
-    LOG("[metal] guest heap: %llu MB wrapped of %llu (the device's largest buffer)%s\n", len >> 20,
-        (uint64_t)HEAP_MAX >> 20, b ? "" : ": failed too");
-    return b;
+// The guest heap as Metal buffers, one per 2 GiB chunk: this driver (NVIDIA/MetalOld) silently reads zeros from a
+// no-copy buffer larger than 2 GiB (a 3 GiB wrap gave every draw zeroed vertices, so the whole game image was black).
+// A device whose buffers can't be that large (iOS) gets smaller chunks, or fewer than the heap's size: the log says so.
+static void wrap_guest_heap(void) {
+    for (int i = 0; i < 4; i++) g_guest_chunks[i] = nil;
+    g_guest_chunk_count = 0;
+    g_guest_wrapped = 0;
+    uint64_t len = GUEST_CHUNK_MAX;
+    if ((uint64_t)dev.maxBufferLength < len) len = (uint64_t)dev.maxBufferLength & ~0x3fffull;
+    g_guest_chunk_len = len;
+    while (len && g_guest_wrapped < HEAP_MAX && g_guest_chunk_count < 4) {
+        uint64_t n = HEAP_MAX - g_guest_wrapped < len ? HEAP_MAX - g_guest_wrapped : len;
+        id<MTLBuffer> b = [dev newBufferWithBytesNoCopy:(void *)(uintptr_t)(HEAP_BASE + g_guest_wrapped)
+                                                length:n options:MTLResourceStorageModeShared deallocator:nil];
+        if (!b) break;
+        g_guest_chunks[g_guest_chunk_count++] = b;
+        g_guest_wrapped += n;
+    }
+    g_guest_buffer = g_guest_chunk_count ? g_guest_chunks[0] : nil;
+    g_guest_buffer_base = HEAP_BASE;
+    if (g_guest_wrapped < HEAP_MAX)
+        LOG("[metal] guest heap: %llu MB wrapped of %llu (%d chunks of at most %llu MB)\n", g_guest_wrapped >> 20,
+            (uint64_t)HEAP_MAX >> 20, g_guest_chunk_count, len >> 20);
+}
+
+// The chunk holding guest range [addr, addr+size), and the offset to bind it with; nil when that range isn't inside
+// one chunk of the wrapped heap (the caller copies such data instead).
+id<MTLBuffer> guest_buffer_chunk(uint64_t addr, uint64_t size, uint64_t *offset) {
+    if (!g_guest_chunk_len || addr < HEAP_BASE || addr - HEAP_BASE >= g_guest_wrapped) return nil;
+    uint64_t rel = addr - HEAP_BASE, i = rel / g_guest_chunk_len, in = rel - i * g_guest_chunk_len;
+    if (i >= (uint64_t)g_guest_chunk_count) return nil;
+    uint64_t clen = i + 1 < (uint64_t)g_guest_chunk_count ? g_guest_chunk_len : g_guest_wrapped - i * g_guest_chunk_len;
+    if (in + size > clen) return nil;
+    *offset = in;
+    return g_guest_chunks[i];
 }
 
 void backend_init(void) {
@@ -739,8 +789,7 @@ void backend_init(void) {
     sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
     present_sampler = [dev newSamplerStateWithDescriptor:sd];
     // Wrap the guest heap: memory pools live there, and GPU addresses are guest addresses.
-    g_guest_buffer_base = HEAP_BASE;
-    g_guest_buffer = wrap_guest_heap();
+    wrap_guest_heap();
     if (!g_guest_buffer) FATAL("cannot wrap guest heap in a Metal buffer (max %llu)\n", (uint64_t)dev.maxBufferLength);
     renderer_init(dev);
     if (getenv("LARECOMP_ASPECT_TEST")) {  // experiment: widen the game's 16:9 aspect constant
@@ -768,13 +817,16 @@ void backend_reset(void) {
     while (g_reg_n > 0) backend_texture_destroyed(g_reg[g_reg_n - 1]);
     renderer_reset();
     g_last_presented = NULL;
+    for (int i = 0; i < 4; i++) g_guest_chunks[i] = nil;
+    g_guest_chunk_count = 0;
+    g_guest_wrapped = 0;
     g_guest_buffer = nil;
     LOG("[metal] reboot: %d textures released (%d left alive, %.0f MB)\n", n, g_tex_live, g_tex_live_bytes / 1048576.0);
 }
 
 void backend_guest_memory_reset(void) {
     if (!queue) return;
-    g_guest_buffer = wrap_guest_heap();
+    wrap_guest_heap();
     if (!g_guest_buffer) FATAL("cannot wrap guest heap in a Metal buffer\n");
 }
 
@@ -1089,14 +1141,23 @@ void renderer_save_texture(id<MTLTexture> tex, const char *path) {
     if (g_save_upright || strstr(path, "window")) flip = 0;  // the window image is already upright
     float pv[8] = {flip, 0, 0, 0, shot_crop[0], shot_crop[1], shot_crop[2], shot_crop[3]};
     [e setVertexBytes:pv length:sizeof pv atIndex:0];
+    { float zero[4] = {0, 0, 0, 0}; [e setFragmentBytes:zero length:sizeof zero atIndex:1]; }  // (fs: no solid override)
     [e setFragmentTexture:raw_view(tex) atIndex:0];
     [e setFragmentSamplerState:present_sampler atIndex:0];
     [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [e endEncoding];
+    // Read back through a blit into a shared buffer: some drivers (the NVIDIA/MetalOld one) return zeros from
+    // getBytes on a texture, which made every saved PNG black.
+    id<MTLBuffer> rb = [dev newBufferWithLength:w * h * 4 options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> bl2 = [cb blitCommandEncoder];
+    [bl2 copyFromTexture:dst sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+              sourceSize:MTLSizeMake(w, h, 1) toBuffer:rb destinationOffset:0
+    destinationBytesPerRow:w * 4 destinationBytesPerImage:w * h * 4];
+    [bl2 endEncoding];
     [cb commit];
     [cb waitUntilCompleted];
     uint8_t *px = malloc(w * h * 4);
-    [dst getBytes:px bytesPerRow:w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+    memcpy(px, rb.contents, w * h * 4);
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     CGContextRef ctx = CGBitmapContextCreate(px, w, h, 8, w * 4, cs, kCGImageAlphaPremultipliedLast);
     CGImageRef img = CGBitmapContextCreateImage(ctx);
@@ -1258,10 +1319,22 @@ void backend_present(NvnTexture *t) {
             psx = sx, psy = sy, pdw = dw, pdh = dh;
         }
         renderer_set_scale((float)sx, (float)sy);
-        if (b && b->tex) {
-            id<MTLTexture> src = raw_view(b->tex);
+        // LARECOMP_PRESENT_SOLID=r,g,b,a: the present pass draws that flat color instead of the game image
+        // (diagnostic: tells a black game image apart from a present pass that never reaches the drawable).
+        static float present_solid[4] = {0, 0, 0, 0};
+        static int solid_init;
+        if (!solid_init) {
+            solid_init = 1;
+            const char *e = getenv("LARECOMP_PRESENT_SOLID");
+            if (e) sscanf(e, "%f,%f,%f,%f", &present_solid[0], &present_solid[1], &present_solid[2], &present_solid[3]);
+        }
+        static int present_logged;
+        if (!present_logged++)
+            LOG("[metal] present: texture %p backend %p image %p\n", (void *)t, (void *)b, b ? (__bridge void *)b->tex : NULL);
+        if ((b && b->tex) || present_solid[3] > 0.0f) {
+            id<MTLTexture> src = (b && b->tex) ? raw_view(b->tex) : nil;
             // SMAA (Video tab "Anti-aliasing"): first, at the game image's size (MetalFX then upscales its result)
-            if (g_settings.antialias == AA_SMAA) {
+            if (src && g_settings.antialias == AA_SMAA) {
                 [enc endEncoding];
                 src = smaa_encode(cb, src);
                 MTLRenderPassDescriptor *rp2 = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1274,7 +1347,7 @@ void backend_present(NvnTexture *t) {
             // spatial upscaler brings it to the window's size first (the whole image, so the interior crop below
             // still applies); the present pass then samples it about 1:1. Its own pass: the drawable's pass is
             // ended and resumed (load) around it.
-            id<MTLTexture> up = metalfx_upscale(cb, src, vw / crop[2], vh / crop[3]);
+            id<MTLTexture> up = src ? metalfx_upscale(cb, src, vw / crop[2], vh / crop[3]) : nil;
             if (up) {
                 [enc endEncoding];
                 up = metalfx_encode(cb, src);
@@ -1291,6 +1364,7 @@ void backend_present(NvnTexture *t) {
             float pv[8] = {flip, 0, 0, 0, crop[0], crop[1], crop[2], crop[3]};
             memcpy(g_shot_crop, crop, sizeof crop);
             [enc setVertexBytes:pv length:sizeof pv atIndex:0];
+            [enc setFragmentBytes:present_solid length:sizeof present_solid atIndex:1];
             [enc setFragmentTexture:src atIndex:0];
             [enc setFragmentSamplerState:present_sampler atIndex:0];
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -1577,6 +1651,12 @@ void ui_window_init(void) {
 #endif
     if (getenv("RECOMP_BC_SOFT")) g_bc_soft = atoi(getenv("RECOMP_BC_SOFT")) != 0;
     if (g_bc_soft) LOG("[metal] no BC texture support on this GPU: BC1-7 decoded on the CPU\n");
+    // ASTC: Apple GPUs (Apple silicon Macs, iPhones / iPads from the A8) have it. Intel Macs' GPUs (Metal 2 only,
+    // Common feature sets) may not (NVIDIA / AMD, and older Intel), and creating an ASTC texture there aborts inside
+    // Metal ("Texture Descriptor Validation: invalid pixelFormat"): decode it on the CPU as the Vulkan path does.
+    g_astc_soft = ![dev supportsFamily:MTLGPUFamilyApple2];
+    if (getenv("RECOMP_ASTC_SOFT")) g_astc_soft = atoi(getenv("RECOMP_ASTC_SOFT")) != 0;
+    if (g_astc_soft) LOG("[metal] no ASTC texture support on this GPU: ASTC decoded on the CPU\n");
     layer.device = dev;
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly = getenv("LARECOMP_WINDOW_SHOT") ? NO : YES;

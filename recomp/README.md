@@ -26,11 +26,16 @@ and `build/`, which git ignores and the repo's proprietary-content check blocks.
 | `docs/` | findings from the bring-up (names and behaviour only, no game code) |
 | `private/`, `generated/`, `build/` | made from your dump (ignored; may be symlinks to another disk) |
 
-## Building (macOS, Apple Silicon)
+## Building (macOS, Apple silicon or Intel)
 
 Requirements: Xcode command line tools (clang), Homebrew `sdl3`, Python 3 (3.12+). About 0.7 GB of disk for the
 generated C and 1 GB for the build. (FFmpeg is only for games whose code plays movies; SMM2's has none:
 `GAME_MOVIES := 0` in `games/smm2/game.mk`.)
+
+Both architectures build natively (there is no macOS cross target): the game code's FP/SIMD lowering follows the
+host. On Apple silicon it is the generated code's own inline asm (`generated/smm2`, `--simd asm`); on Intel
+(x86-64) it is the portable C lowering (`generated/smm2-c`, `--simd c`), the same one as on Windows / Linux x64,
+built for x86-64-v3 (AVX2 + FMA, checked at startup).
 
 You need your own extracted dump: the base game's RomFS and the v3.0.3 update's ExeFS (`main`, `sdk`, `rtld`,
 `main.npdm`) and RomFS. By default `make` looks in `~/smm-work/extracted/` (`smm2-romfs`, `smm2-v303-exefs`,

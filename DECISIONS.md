@@ -1769,3 +1769,38 @@ SMM2's miss sequence (states, timers, the card) would mean changing game logic i
 the same frames faster changes nothing the game can see except wall time.
 **Would change:** a restart that has to be quicker than the machine can run the miss frames (the reload itself, about
 0.7 s on an M-series Mac, isn't shortened), or the owner wanting the fanfare kept.
+
+## 2026-10-22 — macOS x86-64 builds natively, with the portable-C lowering
+
+**Decision:** macOS is a native-only target: `make` builds for the host architecture (`uname -m`), so an Intel
+Mac builds an x86-64 executable and `.app` without a cross toolchain. The host architecture also selects the game
+code's FP/SIMD lowering: the generated code's inline asm on Apple silicon (`generated/smm2`, `--simd asm`), the
+portable-C lowering on x86-64 (`generated/smm2-c`, `--simd c`), the same one Windows / Linux x64 use, built with
+`-march=x86-64-v3` (AVX2 + BMI2/FMA, checked at startup by `require_cpu()` in `runtime/platform/macos.c`; a CPU
+without them gets a message instead of an illegal instruction). Homebrew paths are detected for both prefixes
+(`/opt/homebrew` and `/usr/local`), and the tool scripts (`bundle_macos.sh`, `build_deps_macos.sh`,
+`build_hactool.sh`, `fetch_python.sh`, `fetch_zig.sh`, `package_lib.sh`) and `requirements-gen.txt` take
+`macos-x86_64` where they took `macos-arm64`.
+**Why:** the recompiler emits host code and the Metal layer is host architecture-agnostic, so an Intel build is the
+same pipeline with a different code generator; the x86-64 SIMD asm lowering doesn't exist yet, and the portable-C
+one is proven on Windows / Linux x64 (the SIMD differential test passes for `x86_64-macos` with zig cc: 3000
+encodings, 35988 cases).
+**Would change:** an x86-64 inline-asm lowering (for speed and to match the other platforms' code shape), or a
+universal (arm64 + x86-64) `.app`.
+
+## 2026-10-22 — ASTC is decoded on the CPU where the Metal GPU has no ASTC textures
+
+**Decision:** at backend init the Metal renderer sets `g_astc_soft` unless the device reports the Apple GPU family
+(`supportsFamily:MTLGPUFamilyApple2`; `RECOMP_ASTC_SOFT=1|0` overrides it). In that mode `mtl_format` maps NVN's
+ASTC LDR formats (`0x79`-`0x94`) to `RGBA8Unorm` / `RGBA8Unorm_sRGB` (the sRGB half of the range), and
+`upload_texture` decodes each level's blocks with `runtime/nvn/astc.c` (the decoder the Vulkan path already uses)
+before uploading, per depth slice.
+**Why:** opening the Course World on a Metal 2-only Intel Mac (NVIDIA GT 755M, GPU family Common1/2) aborted in
+`-[MTLTextureDescriptorInternal validateWithDevice:]` with "invalid pixelFormat (204)" (`ASTC_4x4_LDR`); Metal
+validates descriptor formats at creation and there is no support query that would let the renderer fall back per
+texture. The alternatives were to guess from the device name / `Mac2` (the GT 755M reports `Mac2 = 0`, but older
+Intel GPUs are ambiguous) or to decode always. Checking Apple GPU families is exact for the GPUs that have ASTC and
+falls back to a known-correct (just slower at upload) path elsewhere; Intel Macs with native ASTC merely lose a
+one-time hardware decode.
+**Would change:** a per-pixel-format support query arriving in Metal, or Intel Macs' upload cost mattering enough
+to allow `Mac2` devices through after checking their vendor another way.

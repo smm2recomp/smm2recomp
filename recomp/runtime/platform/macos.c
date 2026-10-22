@@ -35,7 +35,22 @@ static void on_term(int sig, siginfo_t *si, void *uc) {
     if (sig != SIGUSR1) _exit(0);
 }
 
+#if defined(__x86_64__)
+#include "x86_cpu.h"
+// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
+// with an illegal instruction on an older CPU.
+static void require_cpu(void) {
+    if (x86_cpu_has_v3()) return;
+    fprintf(stderr, "FATAL: " GAME_TITLE " needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or "
+                    "newer).\n");
+    exit(1);
+}
+#else
+static void require_cpu(void) {}
+#endif
+
 void plat_init(void) {
+    require_cpu();
 #if TARGET_OS_IPHONE
     {   // iOS: no terminal - the log goes to Documents/smm2recomp.log (Files app / Finder)
         const char *home = getenv("HOME");
@@ -214,7 +229,13 @@ static void crash_handler(int sig, siginfo_t *si, void *ctx) {
     if (sig == SIGABRT && depth++ > 0) { signal(SIGABRT, SIG_DFL); abort(); }  // (nested: just die - the report
                                                                                // itself aborting looped, 5.7 GB log)
     uint64_t fa = (uint64_t)si->si_addr;
+#if defined(__aarch64__)
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr;
+#elif defined(__x86_64__)
+    uint64_t pc = uc->uc_mcontext->__ss.__rip, lr = 0;  // (x86-64: no link register)
+#else
+    uint64_t pc = 0, lr = 0;
+#endif
     if (rt_fault_watch(fa, pc)) return;
     char what[32];
     snprintf(what, sizeof what, "signal %d", sig);

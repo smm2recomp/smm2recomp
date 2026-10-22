@@ -8,7 +8,7 @@
 #   zig/           the compiler the game code is built with (tools/fetch_zig.sh)
 #   hactool/       hactool, for NSP / XCI and the firmware (tools/build_hactool.sh; ISC)
 #   licenses/      third-party licenses; THIRD-PARTY.txt says which is which
-# usage: stage_common <dest> <target> <zig target>   (target: windows-x86_64 | linux-x86_64 | linux-aarch64 | macos-aarch64)
+# usage: stage_common <dest> <target> <zig target>   (target: windows-x86_64 | linux-x86_64 | linux-aarch64 | macos-aarch64 | macos-x86_64)
 stage_common() {
     local dest=$1 target=$2 zt=$3
     mkdir -p "$dest/tools/games/smm2" "$dest/gamelib-src/mods" "$dest/licenses"
@@ -112,7 +112,7 @@ EOF
         ;;
         macos-*) cat >> "$f" <<EOF
 
-macOS 15 or newer on Apple silicon. The app isn't notarized: the first time, right-click it and choose Open (macOS
+macOS 15 or newer, on Apple silicon or Intel (x86-64). The app isn't notarized: the first time, right-click it and choose Open (macOS
 then checks the whole app once, which can take a few minutes). If
 macOS still refuses it or the recompiler ("zig", "python3", "hactool") is blocked, run once in Terminal:
     xattr -dr com.apple.quarantine "/path/to/Super Mario Maker 2.app"

@@ -31,6 +31,7 @@ checks it, recompiles the game code on your computer, and then runs it.
    | Windows 10 / 11, x64 | `SMM2Recomp-windows-x86_64.zip` | a CPU with AVX2, a Vulkan 1.3 graphics driver ([docs/windows.md](docs/windows.md)) |
    | Linux, x64 or arm64 | `SMM2Recomp-linux-x86_64.tar.gz`, `-linux-aarch64.tar.gz` | SDL3 3.2+ and a Vulkan 1.3 driver from your distribution (Debian 13, Ubuntu 25.04, Fedora 41, Arch or newer); x64: AVX2 |
    | macOS 15+, Apple silicon | `SMM2Recomp-macos-arm64.zip` (`Super Mario Maker 2.app`) | nothing; the app isn't notarized: right-click > Open the first time (macOS then checks the whole app once, which can take a few minutes) |
+| macOS 15+, Intel (x86-64) | no package yet: build it from source (see [Building](#building)) | a CPU with AVX2 (Intel Haswell / 2013 or newer); Homebrew `sdl3` |
 
 2. **Unpack it and start it** (`smm2recomp.exe`, `./smm2recomp` or `Super Mario Maker 2.app`). Windows
    keeps everything in the unpacked folder, so put it somewhere writable.
@@ -84,6 +85,7 @@ build it yourself from source.
 | Platform | Graphics | Status |
 |---|---|---|
 | **macOS** (Apple Silicon) | Metal | Plays courses. Input replays stay frame-for-frame in sync with the game running in Ryujinx, and in-course frames are pixel-identical in 71 of 90 style × theme combinations. The reference platform. The player app goes from an empty data folder through its setup screen and the first-launch recompile to the title screen. |
+| **macOS** (Intel, x86-64) | Metal | Builds and runs natively on an Intel Mac: the game code uses the portable-C lowering (as on Windows / Linux x64) and the SIMD differential tests pass. Booted to the title at 60 fps and into Course World on a Metal 2-only GPU (NVIDIA GT 755M), which needs the driver limits in [PROGRESS.md](PROGRESS.md) worked around (no ASTC textures, no swizzle views, no Metal binary archives). MetalFX (the upscaler) needs Apple silicon or a supported GPU: the app falls back to bilinear scaling. |
 | **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built on a Mac and installed on your own device. |
 | **Windows** (x64) | Vulkan | The player package (setup screen, recompiler) builds; not yet tested on real hardware. See [docs/windows.md](docs/windows.md). |
 | **Linux** (x64, arm64) | Vulkan | The player packages build; arm64 boots to the title screen in a VM. |
@@ -124,8 +126,8 @@ The recompiler is a fork of [LAS Recomp](https://github.com/peiikai/LASRecomp) (
 - A dump of **Super Mario Maker 2**: the base game RomFS plus the **v3.0.3 update** ExeFS and
   RomFS, extracted
 - For the 100 Mario Challenge, a dump of **Super Mario Maker** (Wii U)
-- macOS on Apple Silicon with the Xcode command-line tools, Homebrew `sdl3` and `ffmpeg`, and
-  Python 3.12 or newer
+- macOS on Apple silicon or Intel (x86-64, with AVX2) with the Xcode command-line tools, Homebrew
+  `sdl3` and `ffmpeg`, and Python 3.12 or newer
 - About 2 GB of free disk space
 
 ### macOS
