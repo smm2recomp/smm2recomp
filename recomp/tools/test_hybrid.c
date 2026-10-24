@@ -25,6 +25,9 @@ static void mode_table(void) {
         {2, true, "mod", {1, 0, 1}},
         {2, true, "backend", {0, 0, 0}},
         {2, true, "bogus", {1, 0, 1}},
+        {3, false, "", {0, 0, 0}},        // ocw: OCW answers all of Course World, the mod none
+        {3, true, "", {0, 0, 0}},         // ... whatever hundred= says
+        {3, true, "mod", {0, 0, 0}},      // ... and course_world= cannot ask the mod back in
     };
     for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
         HyMode m = hy_mode(rows[i].backend, rows[i].hundred, rows[i].cw);

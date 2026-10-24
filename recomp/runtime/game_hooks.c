@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "cpu.h"
+#include "game_rows.h"
 #include "settings.h"
 
 #define WEAK __attribute__((weak))
@@ -48,6 +49,10 @@ WEAK void game_texture_init(uint64_t addr, uint32_t width, uint32_t height, uint
 }
 WEAK void game_texture_final(uint64_t addr) { (void)addr; }
 
+// ---- a game's mod settings that are not switches, in the same tab after them (runtime/game_rows.h): none
+WEAK int game_mod_rows(const GameModRow **out) { *out = NULL; return 0; }
+WEAK void game_mod_rows_changed(void) {}
+
 // ---- once per frame on the game's main thread (runtime/hle/input.c), and per presented frame (renderers)
 WEAK void warp_game_tick(Cpu *c) { (void)c; }
 WEAK void give_item_tick(Cpu *c, uint64_t frame) { (void)c, (void)frame; }
@@ -83,6 +88,10 @@ WEAK bool game_lan_config(char *relay, size_t relay_len, char *room, size_t room
     (void)relay, (void)relay_len, (void)room, (void)room_len, (void)slot;
     return false;
 }
+
+// ---- the game's modules are loaded and relocated, nothing of the game has run yet (runtime/mods.c mods_boot, after
+// loader_load): where a game writes into its own loaded image (the whole mapping is read/write, runtime/loader.c)
+WEAK void game_modules_loaded(void) {}
 
 // ---- the game network stack's settings (runtime/net/netcfg.h), when a game keeps them in its own settings: none
 WEAK bool game_net_config(const char *key, char *out, size_t cap) {

@@ -10,7 +10,8 @@ On top of the original game it adds:
 - **The 100 Mario Challenge from Super Mario Maker 1**, with SMM1's difficulty select, world map,
   start card and ending, next to SMM2's own Endless Challenge
 - **Course World without Nintendo's servers**, through a self-hostable open-source course server,
-  or courses from [TGRCode](https://tgrcode.com/mm2)'s public archive
+  courses from [TGRCode](https://tgrcode.com/mm2)'s public archive, or your own
+  [OpenCourse World](https://opencourse.world/) account
 - **SMM1 features as mods**, each with its own switch: Mystery Mushroom costumes, Lanky Mario (the Weird
   Mushroom), mid-air shell jumps, overlapping pipes, and "Try it now" buttons to try them in a course
 - **Co-op in Endless and 100 Mario**, **Super Worlds** in Course World, and **editing any course** you
@@ -101,6 +102,7 @@ source.
 | 100 Mario Challenge (SMM1) | Playable start to finish, ending included; co-op with more controllers |
 | Endless Challenge (SMM2) | Playable against the course server; co-op with more controllers |
 | Course World (lists, search, download, play, leaderboards, uploads, Super Worlds) | Working against the course server; likes and comments in progress |
+| Course World against your own OpenCourse World account | Working on macOS: browsing, playing, likes, comments and uploads ([recomp/docs/mods.md](recomp/docs/mods.md)) |
 | Edit any course (as in SMM1) | Working |
 | SMM1 feature switches | Costumes, Lanky Mario, shell jumps, overlapping pipes |
 | Online multiplayer | Through [Nextendo](https://nextendo.network) (sign-in); new, not yet tested on hardware |

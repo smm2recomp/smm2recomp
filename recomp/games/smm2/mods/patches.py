@@ -114,3 +114,29 @@ def _hook(word):
 
 
 PATCHES = {MAIN + off: _hook(word) for off, (word, _) in HOOK_POINTS.items()}
+
+
+# OpenCourse World (mods/ocw.c): the call that builds the WebSocket handshake's HTTP headers. The host builds them
+# instead, so the player's OCW token rides along in one of them; this is the console mod's one code patch
+# (_vendor/ocw-client-mod/source/program/main.cpp branch-links over the same instruction).
+#
+# Unlike the hook points above this one *replaces* the instruction rather than running after it, because the point is
+# to do the call's job differently. With OCW off the host hook returns false and the game's own call is made exactly
+# as before, through the recompiled function the instruction called (so no assumption is made about the format string
+# or its arguments).
+OCW_HEADER = 0xAF560
+OCW_HEADER_WORD = 0x947020B4  # bl main+0x1cb7830 (the string formatting the header is built with)
+
+
+def ocw_header(gen, addr):
+    have = gen.words[(addr - gen.lo) // 4]
+    if have != OCW_HEADER_WORD:
+        raise SystemExit(f'mods/patches.py: {addr:#x} is {have:#010x}, not {OCW_HEADER_WORD:#010x} (not v3.0.3?)')
+    ins = gen.lift(addr)
+    if ins.kind != 'bl':
+        raise SystemExit(f'mods/patches.py: {addr:#x} is {have:#010x}, not a call (not v3.0.3?)')
+    return ('{ extern _Bool smm2_ocw_header(Cpu *); extern void guest_call_orig(Cpu *, uint64_t); '
+            f'if (!smm2_ocw_header(c)) guest_call_orig(c, {ins.target:#x}ull); }}')
+
+
+PATCHES[MAIN + OCW_HEADER] = ocw_header

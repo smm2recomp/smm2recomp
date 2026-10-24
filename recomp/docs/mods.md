@@ -1047,11 +1047,13 @@ Nintendo's servers: only the redirect table's names resolve, every other name is
 |---|---|
 | `ours` (default) | the mod path above; the game's sockets stay off (only the virtual LAN), every name lookup fails |
 | `local-nex` | the mod's online overrides switch **off** (`mod_hundred()` is false), so the game's own enl / NEX code runs on real host sockets against a local NEX test server; with `course_world=mod`: hybrid (below), the offline test of the nextendo setup |
+| `ocw` | the mod's online overrides switch **off**, and the game's own online code talks to **OpenCourse World** with the player's own account ([below](#opencourse-world-backendocw)). The only backend that reaches a public host, and it reaches that one host only |
 | `nextendo` | with a signed-in Nextendo account (`runtime/net/nextendo.h`): **hybrid** (below): the game's own NEX client logs in to Nextendo's SMM2 server, Network Play is theirs, and the mod keeps answering Course World, the Endless Challenge and 100 Mario (courses from TGRCode unless `courses=` says otherwise; `hundred=` doesn't matter). `course_world=backend`: all of Course World from Nextendo, the mod's online overrides off. Not signed in: logged ("not signed in; using our server") and the backend is `ours` |
 
 In the Mods tab's Online section: the "Online backend" choice (the next start) and the Nextendo account (Sign in / Sign out). For the app-level settings page,
-`net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list the three; Nextendo can be chosen
-while an account is signed in.
+`net_backend_options()` / `net_backend_select()` (`runtime/net/netcfg.h`) list them all; Nextendo can be chosen
+while an account is signed in. OpenCourse World's own domain and token are the rows just under that section
+(`games/smm2/mods/ocw.c`, through `runtime/game_rows.h`).
 
 ### Hybrid: Network Play from the backend, Course World from the mod (`games/smm2/mods/hybrid.h`)
 
@@ -1118,14 +1120,15 @@ The net log's TLS plaintext dump masks the player id in NEX station URLs (`PID=<
 | `course_world=` | `RECOMP_MOD_COURSE_WORLD` | `mod` / `backend`: who answers Course World with these backends (hybrid, above) |
 | `nex_test_server=` | `RECOMP_NET_TEST_SERVER` | `ip[:port]` of the test server (default `127.0.0.1:44300`); local addresses only (loopback, private, link-local, 100.64/10). The game's TCP connections to it on 443 go to that port |
 | `net_hosts=` | `RECOMP_NET_HOSTS` | extra redirect entries, `name=ip;*.domain=ip` (local addresses only) |
-| `tls_trust=` | `RECOMP_NET_TLS_TRUST` | local-nex: `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, only towards local addresses. (nextendo: always the pin) |
+| `tls_trust=` | `RECOMP_NET_TLS_TRUST` | local-nex: `local-ca` (default): the server must present a certificate from the local test CA (`net/test-ca.pem`); `any`: any certificate, towards local addresses or the `ocw` host (where it is the default). (nextendo: always the pin) |
 | `tls_ca=` | `RECOMP_NET_TLS_CA` | another CA file |
 | `nextendo_server=` | `RECOMP_NEXTENDO_SERVER` | nextendo: the game server's address (default `51.178.29.194`) |
 | `nextendo_nat=` | `RECOMP_NEXTENDO_NAT` | nextendo: the NAT check's address (default `164.132.111.120`) |
 | `nextendo_tls_pin=` | `RECOMP_NEXTENDO_TLS_PIN` | nextendo: the game server certificate's SPKI SHA-256 (64 hex digits) |
 | `id_token_file=` | `RECOMP_NET_ID_TOKEN_FILE` | a backend-issued ID token to send instead of the local one |
 | `nex_token_file=` | `RECOMP_NET_NEX_TOKEN_FILE` | local-nex: a backend's NEX login token, carried in the local ID token's `nnex` claim; a secret: never logged (nextendo: the signed-in account's own) |
-| `net_log=1` | `RECOMP_NET_LOG=1` | log every socket, name, TLS and token call (TLS plaintext: the first 160 bytes of each read / write) |
+| `net_log=1` | `RECOMP_NET_LOG=1` | log every socket, name, TLS and token call |
+| `net_log_data=1` | `RECOMP_NET_LOG_DATA=1` | ... and the TLS plaintext itself, the first 160 bytes of each read and write. Noisy, so it is off even with `net_log=1`. The player id and any registered secret (`net_log_secret`: the OCW token) are taken out before the line is logged, since a log file is what a player attaches to a bug report |
 
 ### Pieces
 
@@ -1230,3 +1233,118 @@ Tests: `tools/test_net.sh` (`tools/test_netcfg.c`: routing, destinations, the ID
   folders / accounts), `cycle.sh` (one instance), `RECOMP_NET_TRACE_STATES=<states.txt>` (the enl / Network Play /
   NetAppTask state names, made from the player's own game by `stategen.py`; never committed) logs each state entered.
 - Machine load matters: with ~28 other game instances on this Mac one instance reaches Network Play in 4-12 min.
+
+## OpenCourse World (`backend=ocw`)
+
+`games/smm2/mods/ocw.c`. **OpenCourse World** (<https://opencourse.world/>) is a replacement online service for
+SMM2 v3.0.2 / 3.0.3. On a console you install its mod (Atmosphère / Ryujinx) and the game's own online code talks
+to OCW instead of Nintendo. The recomp does the same thing, with the player's own OCW account.
+
+The console mod is `_vendor/ocw-client-mod` (exlaunch, a `subsdk9`). It cannot be loaded here — the recomp loads
+only `main` and `sdk` (`runtime/loader.c`) and runs recompiled C, so there are no instructions to patch at run
+time — so the two patches that matter were ported. Its other eight stub `nn::account` calls that reach real
+Nintendo services on a console; here those reach `runtime/services/acc.c`, which already reports a network service
+account and hands out a local ID token whenever the game's own sockets are on.
+
+| What | Where |
+|---|---|
+| the domain, written over the game's own host string at `main+0x22cc307` | `ocw.c` `game_modules_loaded()`, once the modules are loaded (the whole mapping is read/write) |
+| the WebSocket handshake, built by the host so the token rides in a header | `ocw.c` `smm2_ocw_header()`, from the one patch at `main+0xAF560` (`mods/patches.py`) |
+
+### Turning it on
+
+Sign in at opencourse.world, accept its terms, and take the **domain** and your **personal token** from the package
+it gives you (on a console those go on the SD card as `ocw-config.json`).
+
+**In the game:** the overlay menu (F1) → **Mods**. Pick **OpenCourse World** under "Online backend" in the Online
+section, and fill in the **OpenCourse World** rows just below it: `Domain`, `Address` and `Token`. Each opens a
+field when activated — typed directly with a keyboard, or through the on-screen keyboard with a controller. The
+rows are always shown, even with every mod off, because they have to be set *before* anything can work. Changing
+any of them writes `ocw-config.json`. It all takes effect at the next start: the domain is written into the game's
+code while the modules load.
+
+`Token` says only "set" or "not set" until you activate it; the field appears then, and is hidden again when the
+menu closes. The token never reaches a log either — `net_log_secret` registers it, and `net_log_redact` takes it out
+of a logged line along with the player id.
+
+**Or by hand**, which is the same thing — the file is where the settings live either way:
+
+1. (as above: domain and token from opencourse.world)
+2. `ocw-config.json` next to `smm2mods.ini` in the data folder (macOS source build:
+   `recomp/private/smm2/ocw-config.json`):
+
+   ```json
+   { "domain": "server.opencourse.world", "token": "<22 characters>" }
+   ```
+
+   | key | meaning |
+   |---|---|
+   | `domain` | the host written into the game, so the game looks it up, sends it as `Host:` and names it for SNI. At most **29 characters**: the size of the string slot in the game's own binary. May itself be an address |
+   | `token` | your account's token, exactly **22 characters**. A secret: keep it out of git |
+   | `ip` | optional. The address `domain` resolves to, instead of asking the host resolver — this is how a self-hosted or local OCW instance is reached, and how an IP-only set-up keeps a real name for SNI and `Host:` |
+
+3. `backend=ocw` in `smm2mods.ini` (what the Online section's backend choice writes). Both are needed: without the
+   config the backend logs what is missing and the game stays offline, and without the backend the config is
+   ignored and the game is left exactly as it is.
+
+With `net_log=1` and `log=1` the log shows the domain being written, the name resolving, the socket being allowed
+and the TLS handshake. Add `net_log_data=1` to see the plaintext of the WebSocket upgrade itself; the token is
+overwritten there, so the log stays safe to attach to a bug report.
+
+### What it is allowed to reach
+
+The runtime's network policy is deny-by-default (`runtime/net/netcfg.h`, `../../DECISIONS.md`) and the `ocw`
+backend is the one narrow opening in it:
+
+- **exactly one name resolves** — the one `domain` names, from `ip` if given, else the host resolver. Every other
+  name still fails; the game's names never reach the host resolver.
+- **only its addresses are reachable** — `net_dest_allowed()` allows loopback and the addresses that name has
+  answered with, nothing else. The name is re-resolved every five minutes (OCW's address is in AWS and moves), and
+  addresses are merged rather than replaced so a session already connected to one keeps working.
+- **its certificate is not checked.** `tls_trust` defaults to `any` under this backend, which is also what makes a
+  self-hosted OCW with a self-signed certificate work. The trade is that anyone on the path can read or alter the
+  session, including the token in the handshake; it is opt-in and never the default. `tls_trust=local-ca` with
+  `tls_ca=` pointing at a real bundle turns verification back on.
+
+### What the mod answers under `ocw`
+
+Nothing: `hy_mode` (`games/smm2/mods/hybrid.h`) gives the `ocw` backend `{world 0, login 0, hybrid 0}`, so Course
+World, the Endless Challenge and 100 Mario are all OCW's own, as `course_world=backend` does for Nextendo. Because
+it is not hybrid, the mid-session fall-back to our server on a failed login (`net_backend_fall_back`, which Nextendo
+uses) does not apply here.
+
+### The account
+
+OCW identifies the player by the **token in the handshake**, not by the console's account. The console mod makes
+that plain: it stubs `GetNetworkServiceAccountId` to a flat `0xCAFE`, the same for every OCW player, and stubs
+`LoadNetworkServiceAccountIdTokenCache` so no ID token is sent at all.
+
+Under `backend=ocw` the recomp matches that exactly (`net_account_shared()`, `services/acc.c`): account ID `0xCAFE`
+and an empty ID token. It does *not* use the local account (`runtime/net/token.h`), whose ID is random per install
+and whose JWT is signed with a local key OCW could not check — a changing identity and an unverifiable token are
+both good ways for a server not to find the player's profile again.
+
+### Limits
+
+TLS is a **1.2 client only** (`runtime/net/mbedtls_user_config.h`); `ssl.c` pins both the minimum and the maximum,
+so a server that required 1.3 would fail the handshake whatever `tls_trust` says. OCW accepts 1.2 (checked
+2026-10-22, Let's Encrypt ISRG Root X2) — re-check here if its TLS configuration is ever tightened.
+
+How far the game's own Course World code gets against a real service is **not yet known**: `local-nex` has only
+ever been run against `tools/nex_test_server`.
+
+## Relaxed checks (`games/smm2/mods/relax.c`)
+
+Two of the game's own checks made to always pass, each behind its own setting, **both off by default**. They came
+from the OpenCourse World console mod, which applies them unconditionally; here they are a mod of their own, so
+they work with any course server and OCW does not quietly change the game's behaviour.
+
+| ini key | Variable | Mods tab | What |
+|---|---|---|---|
+| `no_word_filter=1` | `RECOMP_NO_WORD_FILTER=1` | "No word filter" | the text check (`nn::ngc`'s word filter) always passes, so names it would star out are shown as they are. Only this copy of the game: a course server does its own moderation (`../../docs/self-hosting.md`). Immediately |
+| `allow_broken_courses=1` | `RECOMP_ALLOW_BROKEN_COURSES=1` | "Play courses the game calls broken" | the corrupt-course check always passes, so a course the game would refuse (and replace with a blank one) is played. Useful for courses out of an archive; one that really is broken may misbehave. From the next course start |
+
+Each works as the console mod does it — the whole function returns 1 — but behind the setting: the hook
+(`mods/relax.py`) runs before the function's own first instruction and returns early only when the setting is on
+(`c->x[0] = 1; return;` is exactly `movz w0, #1; ret`, since the generator renders a guest `ret` as a plain
+`return`). With the setting off the function behaves as before.

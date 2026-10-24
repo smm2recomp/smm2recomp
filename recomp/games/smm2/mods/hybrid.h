@@ -7,6 +7,8 @@
 //   Nextendo, Network Play is theirs; Course World, the Endless Challenge and 100 Mario stay the mod's (TGRCode or
 //   our server), whatever hundred= says. course_world=backend leaves all of Course World to Nextendo.
 // - local-nex: the game's own NEX client against a local test server; course_world=mod makes it hybrid (tests).
+// - ocw: OpenCourse World answers all of it (mods/ocw.c), so the mod answers nothing - as course_world=backend does
+//   for nextendo. Course World, the Endless Challenge and 100 Mario are OCW's own.
 #pragma once
 #include <stdbool.h>
 
@@ -16,6 +18,6 @@ typedef struct {
     bool hybrid;  // the game's own NEX client is logged in to the backend while the mod answers Course World
 } HyMode;
 
-// backend: the NetBackend in effect (0 ours, 1 local-nex, 2 nextendo); hundred: hundred=1;
+// backend: the NetBackend in effect (0 ours, 1 local-nex, 2 nextendo, 3 ocw); hundred: hundred=1;
 // course_world: "" (unset), "mod" or "backend" (any other value counts as unset)
 HyMode hy_mode(int backend, bool hundred, const char *course_world);

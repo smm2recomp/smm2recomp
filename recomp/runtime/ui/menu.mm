@@ -27,6 +27,7 @@ extern "C" bool vk_imgui_backend_init(void);  // runtime/nvn/vulkan/imgui_glue.c
 #endif
 
 extern "C" {
+#include "../game_rows.h"
 #include "../hle.h"
 #include "../settings.h"
 #include "menu.h"
@@ -81,7 +82,8 @@ static void set_open(bool open) {
         menu_tabs_focus(!opened);  // selected one
         opened = true;
     }
-    else { settings_save(); osk_cancel(); g_text_busy = false; }
+    // (game_mod_rows_hide: a game's secret settings rows go back to "set" / "not set")
+    else { settings_save(), osk_cancel(), game_mod_rows_hide(); g_text_busy = false; }
 }
 
 static ImGuiKey key_from_scancode(SDL_Scancode sc) {
@@ -607,11 +609,49 @@ extern "C" bool launcher_has_settings(void);   // runtime/ui/launcher.mm: the Mo
 extern "C" bool launcher_settings_rows(void);
 extern "C" bool online_rows_available(void);   // runtime/ui/online_rows.mm: the Online section (backend, Nextendo account)
 extern "C" void online_rows(void);
+
+// A game's settings that are not switches (runtime/game_rows.h): sections, switches and text fields.
+// (no menu_keyboard_run here: it blocks re-presenting frames from the game thread, and these rows are drawn during
+// a present - opt_text has its own field, with the on-screen keyboard for a controller)
+#define MAX_SHOWN_ROWS 16
+static bool g_row_shown[MAX_SHOWN_ROWS];  // a secret row was activated: its field is drawn until the menu closes
+extern "C" void game_mod_rows_hide(void) {
+    for (int i = 0; i < MAX_SHOWN_ROWS; i++) g_row_shown[i] = false;
+}
+
+static void game_rows(void) {
+    const GameModRow *r;
+    int n = game_mod_rows(&r);
+    bool changed = false;
+    for (int i = 0; i < n; i++) {
+        if (!r[i].value && !r[i].text) { opt_section(r[i].label); continue; }
+        if (r[i].value) { changed |= opt_toggle(r[i].label, r[i].value, r[i].def, r[i].desc); continue; }
+        // a secret: "set" / "not set" until the row is activated, then the field itself (never masked in place -
+        // that would mean swapping the buffer under a live ImGui field)
+        if (r[i].secret && i < MAX_SHOWN_ROWS && !g_row_shown[i]) {
+            if (opt_action(r[i].label, r[i].text[0] ? "set" : "not set", r[i].desc)) g_row_shown[i] = true;
+            continue;
+        }
+        // max_len is in characters, as the game's own keyboard limit is: cut at the boundary after the last one,
+        // never inside one (a domain is ASCII, but nothing here promises that)
+        if (r[i].max_len > 0 && !opt_text_editing(r[i].label)) {
+            int chars = 0;
+            for (char *q = r[i].text; *q; q++) {
+                if (((unsigned char)*q & 0xc0) == 0x80) continue;
+                if (chars++ == r[i].max_len) { *q = 0; break; }
+            }
+        }
+        changed |= opt_text(r[i].label, r[i].text, (size_t)r[i].cap, r[i].hint, r[i].desc);
+    }
+    if (changed) game_mod_rows_changed();
+}
+
 static void tab_mods(void) {
     const GameModToggle *t;
     int n = game_mod_toggles(&t);
     opt_begin("##mods", ImGui::GetFontSize() / 34);
     if (online_rows_available()) online_rows();  // (first: the backend decides what the rest talks to)
+    game_rows();  // the game's own settings for that backend (OCW's domain and token), then its mods below
     if (n > 0 && t[0].value) opt_section("Mods");
     bool changed = false;
     for (int i = 0; i < n; i++) {
@@ -813,8 +853,9 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     static const int order[] = {8, 0, 1, 2, 9};  // Controls, Video, Audio, Mods, Quit
     const GameModToggle *mods;
     const GameModTrigger *triggers;
-    bool have_mods = game_mod_toggles(&mods) > 0 || game_mod_triggers(&triggers) > 0 || launcher_has_settings() ||
-                     online_rows_available();
+    const GameModRow *mrows;
+    bool have_mods = game_mod_toggles(&mods) > 0 || game_mod_rows(&mrows) > 0 ||
+                     game_mod_triggers(&triggers) > 0 || launcher_has_settings() || online_rows_available();
     for (int i : order)  // (Quit: in game only; Mods: when the game has some)
         if ((i != 9 || !prelaunch) && (i != 2 || have_mods)) tabs[ntabs++] = {names[i], i, true};
     int cur = 0;  // g_tab / g_tab_request hold ids

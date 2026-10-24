@@ -2216,3 +2216,45 @@ on a device where the formats exist the decoded path is still correct, just slow
 then completed on the GT 755M with fireballs and no abort (2026-10-22).
 **Would change:** a per-pixel-format support query in Metal, or proof that some non-Apple families support the
 formats (all of them are gated on `Apple2` today, so Intel Macs with native RGB565 pay a one-time CPU expansion).
+## 2026-10-22 — OpenCourse World: the console mod ported, one narrow opening in the network policy
+
+**Decision** (owner, 2026-10-22: "how can we make this ryujinx mod work with this recomp"): SMM2's own online code
+talks to **OpenCourse World** with the player's own account, as the Atmosphère / Ryujinx mod does it on a console.
+A new backend `ocw` (`runtime/net/netcfg.h`) next to `ours`, `local-nex` and `nextendo`, and
+`games/smm2/mods/ocw.c` reading `ocw-config.json` (`domain`, `token`, optional `ip`) from the data folder.
+
+- **Ported, not loaded.** The console mod (`_vendor/ocw-client-mod`, exlaunch) ships a `subsdk9` that rewrites live
+  AArch64 instructions. The recomp loads only `main` and `sdk` and runs recompiled C: there is no instruction left
+  to patch at run time, no subsdk slot, and a recomp "mod" is a RomFS overlay plus C hooks.
+- **Two of its ten patches were needed.** The domain string (`main+0x22cc307`, written at boot: the module's whole
+  mapping is read/write) and the WebSocket handshake (`main+0xAF560`, a generator patch so the host builds the
+  header and the token rides in it). The other eight stub `nn::account` calls that reach real Nintendo services on
+  a console; here they reach `runtime/services/acc.c`, which already reports a network service account and hands
+  out a local ID token whenever the game's own sockets are on. The two remaining ones (word filter, corrupt-course
+  check) became **their own mod** with their own switches (`mods/relax.c`, owner's call) rather than riding along
+  with OCW: they are useful with any server, and OCW must not quietly change the game's behaviour.
+- **Deny-by-default stands; this is one opening in it.** Exactly the one name `domain` gives resolves (from `ip` if
+  present, else the host resolver; every other name still fails and the game's names still never reach the host
+  resolver), only the addresses that name answers with are reachable, the name is re-resolved every five minutes
+  (OCW is in AWS and will move) and addresses are merged rather than replaced so a live session keeps working.
+  Nothing happens at all unless `backend=ocw` **and** a usable `ocw-config.json` are both there.
+- **Certificates are not checked there** (owner, 2026-10-22: "ignore tls certs and trust any cert, even self
+  signed; that's ok for our use case"). `tls_trust=any` already existed and already mapped to
+  `MBEDTLS_SSL_VERIFY_NONE`; the only change is the gate in `services/ssl.c` that refused it towards a non-local
+  address, now `net_tls_any_allowed()` (local addresses, or the ocw host). It is the default under this backend,
+  which is also what makes a self-hosted OCW with a self-signed certificate work. The trade is explicit: anyone on
+  the path can read or alter the session, including the 22-character token in the handshake. Opt-in, never the
+  default, and `tls_trust=local-ca` with `tls_ca=` turns verification back on.
+- **TLS stays a 1.2 client.** OCW accepts TLS 1.2 (checked 2026-10-22: Let's Encrypt ISRG Root X2, ECDSA P-384,
+  which the vendored Mbed TLS supports as built), so the "TLS 1.2 client only" configuration is unchanged. `ssl.c`
+  pins minimum and maximum, so this is the thing to re-check if OCW ever tightens its TLS.
+
+**Why:** the owner's own OCW mod and account, and OCW is a live service the player already has a relationship with,
+so the game's own online code against it is the shortest path to a working Course World. The alternative — an OCW
+client host-side in Rust as a course upstream next to TGRCode (`core/crates/server/src/upstream.rs`) — keeps the
+guest network off entirely and needs no policy change, but means reimplementing OCW's protocol instead of letting
+the game speak it; recorded in `tasks/todo.md` for comparison. OCW's public web API has course metadata but no
+course download, so a TGRCode-style HTTP source was never an option (`PROGRESS.md`).
+**Would change:** OCW requiring TLS 1.3; wanting verification on by default (a pinned OCW CA is the third trust
+mode `DECISIONS.md` already anticipated); or the game's own Course World code turning out not to reach far enough
+in the recomp, which would make the Rust upstream the better route after all.

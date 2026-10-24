@@ -127,7 +127,9 @@ class WindowsExportsTests(unittest.TestCase):
         import re
         src = ''.join(p.read_text() for p in [ROOT / 'recomp/games/smm2/patches.py',
                                               *sorted((ROOT / 'recomp/games/smm2/mods').glob('*.py'))])
-        hooks = set(re.findall(r'extern\s+\w+\s+(\w+)\s*\(\s*Cpu', src))
+        # any host function a patch declares, not only the ones taking Cpu * first (smm2_relax_ok takes the
+        # hooked address): all of them are called from the DLL and all have to be exported
+        hooks = set(re.findall(r'extern\s+\w+\s+(\w+)\s*\(', src))
         exports = set((ROOT / 'recomp/runtime/platform/windows_exports.def').read_text().split())
         drectve = (ROOT / 'recomp/runtime/platform/windows_exports.c').read_text()
         self.assertTrue(hooks)

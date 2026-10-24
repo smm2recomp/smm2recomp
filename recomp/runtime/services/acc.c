@@ -92,6 +92,13 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
         static char jwt[2048];
         const char *t = token;
         uint32_t n = sizeof token - 1;
+        uint64_t shared;
+        if (net_account_shared(&shared)) {  // (ocw: none at all, as the console mod leaves the buffer)
+            if (b && b->size) memset((void *)(uintptr_t)b->addr, 0, b->size);
+            OUT(uint32_t, 0) = 0;
+            resp_size(resp, 4);
+            return true;
+        }
         bool nx = net_backend() == NET_BACKEND_NEXTENDO;
         if (nx && !prepare_nextendo()) LOG("[acc] Nextendo: no game token (offline, or the sign-in has ended)\n");
         if (net_real_sockets() && (n = (uint32_t)net_id_token(jwt, sizeof jwt))) t = jwt;
@@ -123,6 +130,9 @@ static bool online_manager(IpcReq *req, IpcResp *resp) {
 // The network service account id GetAccountId answers (the game's own player id in Course World: it compares a user
 // record's player id with it for "this is me", e.g. My Info's Super World Delete). Nextendo: the PID once known, else 0.
 uint64_t acc_account_id(void) {
+    uint64_t shared;
+    // (ocw: the one id the console mod gives every OCW player - OCW knows the player by the handshake token)
+    if (net_account_shared(&shared)) return shared;
     if (net_backend() == NET_BACKEND_NEXTENDO) return nextendo_pid();
     return net_real_sockets() ? net_nsa_id() : 0x1234567890abcdefull;
 }

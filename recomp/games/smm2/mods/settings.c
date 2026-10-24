@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 
 #include "mod.h"
+#include "../../../runtime/game_rows.h"
 #include "hybrid.h"
 #include "../../../runtime/net/netcfg.h"
 #include "../../../runtime/net/nextendo.h"
@@ -199,6 +200,8 @@ static int mod_toggles(const GameModToggle **out) {
          "(no account needed). Off: the course server set in smm2mods.ini (server=, token=). Takes effect at the "
          "next start.",
          &t_tgrcode, false},
+        // (the backend, incl. OpenCourse World, is the Online section's: runtime/ui/online_rows.mm. OCW's domain
+        // and token are its own rows: mods/ocw.c game_mod_rows)
         // (costumes: mods/costume.c)
         {"Mystery Mushroom costumes",
          "SMM1's costumes in Super Mario Bros. style courses: the Big Mushroom becomes the Mystery Mushroom, and a "
@@ -224,6 +227,7 @@ static void mod_toggles_changed(void) {
         mod_ini_set("courses", courses);
         LOG("[mod] courses from %s at the next start\n", t_tgrcode ? "TGRCode" : "your server");
     }
+
     costumes_set_setting(t_costumes);
 }
 
@@ -242,9 +246,15 @@ int coop_toggles(GameModToggle *out, int room);
 void coop_toggles_changed(void);
 int lanky_toggles(GameModToggle *out, int room);
 void lanky_toggles_changed(void);
+int relax_toggles(GameModToggle *out, int room);
+void relax_toggles_changed(void);
+// OpenCourse World's own section, with its domain and token (mods/ocw.c): not switches, so it goes through the
+// GameModRow hook instead (runtime/game_rows.h)
+int ocw_rows(GameModRow *out, int room);
+void ocw_rows_changed(void);
 static int own_shown;  // (the tab showed the switches above: apply them on a change)
 int game_mod_toggles(const GameModToggle **out) {
-    static GameModToggle all[24];
+    static GameModToggle all[24];  // (each mod below is given the room that is left)
     const GameModToggle *own;
     int n = own_shown = mod_toggles(&own);
     for (int i = 0; i < n; i++) all[i] = own[i];
@@ -254,9 +264,20 @@ int game_mod_toggles(const GameModToggle **out) {
     n += quick_retry_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     n += coop_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     n += lanky_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
+    n += relax_toggles(all + n, (int)(sizeof all / sizeof *all) - n);
     *out = n ? all : NULL;
     return n;
 }
+
+// The non-switch rows of the same tab (runtime/game_hooks.c): OpenCourse World's section only, so far.
+int game_mod_rows(const GameModRow **out) {
+    static GameModRow all[8];
+    int n = ocw_rows(all, (int)(sizeof all / sizeof *all));
+    *out = n ? all : NULL;
+    return n;
+}
+
+void game_mod_rows_changed(void) { ocw_rows_changed(); }
 
 void game_mod_toggles_changed(void) {
     if (own_shown) mod_toggles_changed();
@@ -266,6 +287,7 @@ void game_mod_toggles_changed(void) {
     quick_retry_toggles_changed();
     coop_toggles_changed();
     lanky_toggles_changed();
+    relax_toggles_changed();
 }
 
 // Overrides are registered before the game's first instruction runs (dispatch reads them on every first call). Each

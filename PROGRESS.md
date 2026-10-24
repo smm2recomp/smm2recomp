@@ -1044,6 +1044,47 @@ Setup failures first, since they block new players:
   server, though that showed "communication error"); the `courses=` / server settings a fresh data folder gets; and
   whether Course World's sign-in (our offline answer) fails without a saved account. If it isn't fixed by v0.4.0,
   the release notes should ask for the version and `smm2recomp.log`.
+- ✅ **OpenCourse World as a course source** (owner, 2026-10-22; was moved to "possible features" the same day,
+  then built and working the same day): https://opencourse.world/, a replacement online service for SMM2 3.0.2 /
+  3.0.3 on Switch (Atmosphere) and Ryujinx. The player signs in, accepts its EULA and is given a domain and a
+  personal token; the game's own online code then talks to OCW's server. Its web API
+  (server.opencourse.world/api/...) carries course metadata but no course download, so the way in was the game's own
+  network stack, not a TGRCode-style HTTP source.
+  **Working (owner, macOS, 2026-10-22): browsing, playing, likes, comments and uploads.** This is the first time the
+  game's **own** online code has reached a real service through the recomp — `local-nex` had only ever run against
+  `tools/nex_test_server` — so it is evidence for the Nextendo route as well.
+  Built from the owner's own console mod (`_vendor/ocw-client-mod`): two of its ten patches were needed, the domain
+  string at `main+0x22cc307` (written at boot) and the WebSocket handshake at `main+0xAF560` (a generator patch, so
+  the host builds the header with the player's token). The other eight stub `nn::account` calls that
+  `services/acc.c` already answers. Backend `ocw` in `runtime/net/netcfg.c`, mod in `games/smm2/mods/ocw.c`,
+  settings in the Mods tab (domain, address, token) written to `ocw-config.json`. Needs both `backend=ocw` and a
+  usable config before anything changes; deny-by-default stands (one name resolves, only its addresses are
+  reachable, re-resolved every 5 min) and OCW's certificate is not checked (owner's call, which also makes a
+  self-hosted OCW with a self-signed certificate work). TLS stays a 1.2 client: OCW accepts 1.2 (Let's Encrypt ISRG
+  Root X2). Two things had to be fixed on the way:
+  - **The Mii.** `services/mii.c` held an empty database (`GetCount` 0), so Course World asked for a Mii the player
+    had no way to make. It now holds the one default Mii the runtime already had, through `Get` / `Get1`; `Get2` /
+    `Get3` (StoreData, the packed record with its checksum) still answer "none" and say so in the log. **Not gated
+    on the backend: this is the one change here that every player gets.** Whether it moves the Ryujinx frame
+    comparison (71 / 90 courses bit-identical) has not been re-measured — Ryujinx with a user profile has a Mii
+    too, so it should move towards the reference, but that is reasoning, not a measurement.
+  - **The account.** The profile would not stick and the server did not find it again. `net/account.txt` persists
+    with a stable id, so it was not identity churn: it was the local **ID token**, a JWT whose `sub` is the local
+    account id, signed with a key OCW cannot check, where the console mod sends none at all. Under `backend=ocw`
+    the account now matches the mod exactly (`net_account_shared()`): id `0xCAFE` — the same for every OCW player
+    on a console, which is itself the proof that OCW identifies players by the handshake token — and an empty ID
+    token.
+  Decision and trade-offs in `DECISIONS.md` (2026-10-22); plan, diagnosis and what is still open in
+  `tasks/todo.md`. Still open: the `backend=ours` no-change check since this landed, and every platform but macOS
+  (the same runtime compiles for them, but none has been built with these changes).
+- ✅ **Relaxed checks as their own mod** (owner, 2026-10-22: "maybe profanity filter and corrupt course can be their
+  own recomp mod"): `games/smm2/mods/relax.c` + `relax.py`, two settings **off by default** — `no_word_filter` (the
+  `nn::ngc` text check always passes) and `allow_broken_courses` (the corrupt-course check always passes, so a
+  course the game would replace with a blank one is played). Both come from the OCW console mod, which applies them
+  unconditionally; here each has its own switch in the Mods tab, so they work with any course server. Each forces
+  its whole function to return 1, as the mod does, with the guard before the function's own first instruction; the
+  prologues found there (`sub sp, sp, #0x1a0`, `stp x28, x27, [sp, #-0x60]!`) confirm both addresses are function
+  entries, so the early return is equivalent. Not yet exercised by hand.
 - 🔄 **iPhone: on-screen L and ZL sit behind the notch** (owner, 2026-10-20, iPhone 12 mini; built 2026-10-21: the
   controls are offset by the window's left / right safe-area insets, `SDL_GetWindowSafeArea`, updated on safe-area
   and resize events and on touches; not yet seen on the iPhone): the touch
@@ -1062,15 +1103,6 @@ Setup failures first, since they block new players:
   saves and scripts carry over. From the release after v0.3.1.
 
 ### Possible features (not planned)
-- **OpenCourse World as a course source** (owner, 2026-10-22; moved here the same day, "a possible feature for the future"): https://opencourse.world/ selectable as one of the
-  course server options (next to our own server and TGRCode, in the Mods tab's course source setting). Looked at
-  2026-10-22: OCW is a replacement online service for SMM2 3.0.2 / 3.0.3 on Switch (Atmosphere) and Ryujinx. The
-  player signs in (Discord etc.), accepts its EULA, and downloads a mod package plus a personal auth token for the SD
-  card; the game's own online code then talks to OCW's server. Its web API (server.opencourse.world/api/...) is
-  public for course metadata (latest, uncleared, makers, Ninji leaderboards, one-screen thumbnails) but has no web
-  download of course data. So the way in is the game's own network stack (backend local-nex, the Nextendo groundwork)
-  pointed at OCW with the player's token, not a TGRCode-style HTTP source. Needs the owner's OCW account to build and
-  test.
 - **Platform extras** (owner, 2026-10-22: backlog, don't start): a Linux AppImage, a notarised macOS app, a web
   build.
 

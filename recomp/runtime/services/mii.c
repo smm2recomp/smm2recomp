@@ -1,6 +1,11 @@
-// mii:e / mii:u (the console's Mii database): an empty database; BuildDefault / BuildRandom give the default Mii.
-// Calls are logged (the commands follow Ryujinx's
+// mii:e / mii:u (the console's Mii database): a database holding the one default Mii, as a console always holds at
+// least one. BuildDefault / BuildRandom give the same Mii. Calls are logged (the commands follow Ryujinx's
 // IDatabaseService, MIT) so a game that needs Miis shows which ones.
+//
+// SMM2's Course World asks the console for a Mii for the player's maker profile and refuses to go on without one,
+// which an empty database could not answer (the player was asked to make a Mii, with no way to). The entry is
+// served through Get (CharInfoElement) and Get1 (CharInfo). Get2 / Get3 want StoreData, the database's own packed
+// record with its checksum, which is not built here: they still answer "none", and say so in the log.
 #include <stdlib.h>
 #include <string.h>
 
@@ -51,8 +56,30 @@ static void database(Service *s, IpcReq *req, IpcResp *resp) {
         resp_size(resp, 0x58);
         break;
     case 0: case 1: case 20: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // IsUpdated, IsFullDatabase, IsBroken..
-    case 2: OUT(uint32_t, 0) = 0; resp_size(resp, 4); break;                   // GetCount(flag)
-    case 3: case 4: case 8: case 9: OUT(int32_t, 0) = 0; resp_size(resp, 4); break;  // Get, Get1, Get2, Get3: none
+    case 2: OUT(uint32_t, 0) = 1; resp_size(resp, 4); break;                   // GetCount(flag): the one Mii
+    case 3: case 4: {  // Get -> CharInfoElement[] (CharInfo + source), Get1 -> CharInfo[]; both return the count
+        IpcBuf *b = out_buf(req, 0);
+        size_t want = req->cmd == 3 ? 0x5c : 0x58;  // (CharInfoElement: CharInfo then u32 source, 0 = the database)
+        int32_t n = 0;
+        if (b && b->addr && b->size >= want) {
+            uint8_t *p = (uint8_t *)(uintptr_t)b->addr;
+            memset(p, 0, want);
+            mii_default_charinfo(p, getenv("RECOMP_USER_NAME"));
+            n = 1;
+        } else if (b) {
+            LOG("[mii] Get%s: the game's buffer is %llu bytes, one entry needs %zu\n", req->cmd == 3 ? "" : "1",
+                (unsigned long long)b->size, want);
+        }
+        OUT(int32_t, 0) = n;
+        resp_size(resp, 4);
+        break;
+    }
+    case 8: case 9:  // Get2 -> StoreDataElement[], Get3 -> StoreData[]: not built here
+        LOG("[mii] Get%d (StoreData) asked for: answering \"none\" (the database's packed record is not built)\n",
+            req->cmd == 8 ? 2 : 3);
+        OUT(int32_t, 0) = 0;
+        resp_size(resp, 4);
+        break;
     case 22: break;                                                            // SetInterfaceVersion
     default: LOG("[mii] IDatabaseService cmd %u (unhandled, ok)\n", req->cmd); resp_size(resp, 0x10);
     }
