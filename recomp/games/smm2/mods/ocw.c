@@ -27,6 +27,8 @@
 #include <sys/stat.h>
 
 #include "../../../runtime/game_rows.h"
+#include "../../../runtime/kernel.h"
+#include "../../../runtime/net/http.h"
 #include "../../../runtime/net/json.h"
 #include "../../../runtime/net/netcfg.h"
 #include "mod.h"
@@ -126,6 +128,89 @@ void game_modules_loaded(void) {
 }
 
 bool ocw_active(void) { return g_ocw.active; }
+
+// ---- Play History (My Info and a maker's page): the game's own GetUsers record comes from OCW's NEX side with no play
+// statistics, so they are filled in from OCW's REST API, which lists every course a maker played with their own
+// tries, deaths and clears:  GET https://<domain>/api/makers/<maker id>/played?offset=0&size=10000  (public: no token
+// is sent). The user record (0x1f0 bytes, world.c) holds the four numbers the screen shows at +0xfc: courses played,
+// courses cleared, attempts, lives lost. The maker is read from the record the game just got (maker code +0x08, UTF-16
+// without dashes), so the player's own record and any maker's page work alike. A failed request leaves the record
+// exactly as the game wrote it.
+#define OCW_USER_RING 0x68  // the user ring in the network-session object (online.c USER_RING)
+#define OCW_STATS_OFF 0xfc  // plays, clears, attempts, deaths (u32 each)
+#define OCW_REST_TIMEOUT_MS 8000
+
+// The maker ID ("AAA-BBB-CCC") of a user record, from its code; false when the record has none.
+static bool record_maker_id(uint64_t e, char out[12]) {
+    uint64_t buf = g64(e + 0x08);
+    if (!buf || g32(e + 0x10) < 10) return false;
+    char code[10];
+    for (int i = 0; i < 9; i++) {
+        uint16_t ch = *(volatile uint16_t *)(uintptr_t)(buf + 2 * i);
+        if (!((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'Z'))) return false;
+        code[i] = (char)ch;
+    }
+    snprintf(out, 12, "%.3s-%.3s-%.3s", code, code + 3, code + 6);
+    return true;
+}
+
+// {played, cleared, attempts, lives lost} of the maker's played list; false when the request or its answer failed.
+static bool fetch_play_totals(const char *maker_id, uint32_t totals[4]) {
+    char url[256];
+    snprintf(url, sizeof url, "https://%s/api/makers/%s/played?offset=0&size=10000", g_ocw.domain, maker_id);
+    HttpResponse r;
+    kernel_host_wait_begin();  // (the calling guest thread gives its core up while it waits, as server.c does)
+    int st = http_request("GET", url, "Accept: application/json\r\n", NULL, 0, OCW_REST_TIMEOUT_MS, &r);
+    kernel_host_wait_end();
+    if (st != 200) {
+        LOG("[ocw] play history of %s: %s\n", maker_id, st ? "HTTP error" : r.error);
+        http_free(&r);
+        return false;
+    }
+    Json *list = json_parse(r.body, r.len);
+    http_free(&r);
+    if (!list || list->type != JSON_ARR) {
+        LOG("[ocw] play history of %s: the answer is not a list\n", maker_id);
+        json_free(list);
+        return false;
+    }
+    uint32_t played = 0, cleared = 0, tries = 0, deaths = 0;
+    for (const Json *p = list->child; p; p = p->next) {
+        played++;
+        tries += (uint32_t)json_num(json_get(p, "tries"), 0);
+        deaths += (uint32_t)json_num(json_get(p, "deaths"), 0);
+        if (json_bool(json_get(p, "cleared"), false) || json_num(json_get(p, "clears"), 0) > 0) cleared++;
+    }
+    json_free(list);
+    totals[0] = played, totals[1] = cleared, totals[2] = tries, totals[3] = deaths;
+    return true;
+}
+
+// After a GetUsers wrapper of the game ran (no = the network-session object, ret = what the wrapper returned): the
+// first record of its user ring gets the maker's play history. Only with OCW on and the game's own request done.
+void ocw_fill_play_stats(Cpu *c, uint64_t no, uint64_t ret) {
+    if (!g_ocw.active) return;
+    if (g32(no + 0x60) != 0 || (uint8_t)ret != wrapper_ok() || (int32_t)g32(no + OCW_USER_RING + 0x10) < 1) return;
+    uint64_t keep = c->x[0];
+    char id[12], again[12];
+    netobj_lock(c);
+    uint64_t e = g64(no + OCW_USER_RING);
+    bool known = e && record_maker_id(e, id);
+    netobj_unlock(c);
+    uint32_t totals[4];
+    if (known && fetch_play_totals(id, totals)) {  // (outside the lock: HTTP)
+        netobj_lock(c);
+        e = g64(no + OCW_USER_RING);
+        if (e && record_maker_id(e, again) && !strcmp(id, again))
+            for (int i = 0; i < 4; i++) s32(e + OCW_STATS_OFF + 4 * i, totals[i]);
+        netobj_unlock(c);
+        LOG("[ocw] play history of %s: %u played, %u cleared, %u attempts, %u lives lost\n", id, totals[0], totals[1],
+            totals[2], totals[3]);
+    } else if (!known) {
+        LOG("[ocw] play history: the record has no maker code\n");
+    }
+    c->x[0] = keep;
+}
 
 // ---- ocw-config.json written back (the overlay menu's Mods tab, below). The file stays the one place the settings
 // live, so editing it by hand and setting them in the menu are the same thing.

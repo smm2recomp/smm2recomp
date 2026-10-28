@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "mod.h"
+#include "ocw.h"
 #include "../../../runtime/net/json.h"
 
 void mod_fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficulty);  // endless.c
@@ -299,7 +300,12 @@ static void get_users_list(Cpu *c) {  // main+0x14d02d0 and +0x14d7780 (GetUsers
 // GetWorldMap into the detail record as the original does (superworld.c)
 bool superworld_fill_detail(Cpu *c, uint64_t no, const char *id);
 static void get_user_page(Cpu *c) {
-    if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
+    if (!mod_hundred()) {
+        uint64_t self = c->x[0];
+        guest_call_orig(c, c->pc);
+        ocw_fill_play_stats(c, self, c->x[0]);  // (OCW: the Play History from its REST API; else nothing)
+        return;
+    }
     uint64_t no = c->x[0], pid = g64(no + 0x73a30);
     char world[64];
     users_answer(c, no, &pid, 1, "maker page", world);

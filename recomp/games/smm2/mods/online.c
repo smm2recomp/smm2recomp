@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "mod.h"
+#include "ocw.h"
 #include "../../../runtime/net/netcfg.h"
 #include "../../../runtime/net/nextendo.h"
 #include "../../../runtime/net/json.h"
@@ -281,7 +282,12 @@ void mii_default_charinfo(uint8_t out[0x58], const char *nickname);  // runtime/
 
 static void get_my_user(Cpu *c) {
     if (mod_hybrid()) { get_my_user_hybrid(c); return; }
-    if (!mod_answers_login()) { guest_call_orig(c, MAIN_ADDR(0x14d5cd0)); return; }
+    if (!mod_answers_login()) {
+        uint64_t self = c->x[0];
+        guest_call_orig(c, MAIN_ADDR(0x14d5cd0));
+        ocw_fill_play_stats(c, self, c->x[0]);  // (OCW: the Play History from its REST API; else nothing)
+        return;
+    }
     uint64_t no = c->x[0];
     char name[64];
     snprintf(name, sizeof name, "%s", getenv("RECOMP_USER_NAME") ? getenv("RECOMP_USER_NAME") : "Player");
