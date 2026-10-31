@@ -228,6 +228,14 @@ static void miss_mash(uint64_t now) {
     }
 }
 
+// (diagnosis: SMM2 leaving its map for the course while the course scene never comes - the owner's black screen on
+// the iPad, 2026-10-31: the map scene kept drawing, its CourseIn state ran, the play scene was never made)
+static volatile bool course_scene_due;
+static volatile uint64_t left_map_at;              // present count when the CourseIn was let go (0: the scene came)
+static volatile uint32_t course_in_runs, course_in_posts;  // its exec since then; the frames it queued 0x80
+#define UI_QUEUE MAIN_ADDR(0x2c52c20)              // *: +0x578 queued events, +0x57c room (CourseIn's 0x80 goes there)
+#define SCENE_STATE MAIN_ADDR(0x2a39080)           // *: +0x344 a scene change is under way
+
 static void *driver(void *arg) {
     (void)arg;
     const char *ap = getenv("RECOMP_MOD_AUTOPLAY");
@@ -418,6 +426,21 @@ static void *driver(void *arg) {
                 kernel_dump_threads(), audio_guard_report("no play state");
             }
             course_started("fallback");
+        }
+        if (course_scene_due && left_map_at && now - left_map_at > 600) {
+            uint64_t q = g64(UI_QUEUE), sc = g64(SCENE_STATE);
+            char d[256];
+            hundred_flow_describe(d, sizeof d);
+            LOG("[mod] bridge: no course scene 10 s after leaving the map: CourseIn ran %u times since, queued 0x80 %u "
+                "times; event queue %d of %d, scene change under way %d (flow: %s)\n", course_in_runs, course_in_posts,
+                q ? (int)g32(q + 0x578) : -1, q ? (int)g32(q + 0x57c) : -1, sc ? (int)g8(sc + 0x344) : -1, d);
+            left_map_at = 0;
+            static int dumps;
+            if (dumps++ < 3) {
+                extern void kernel_dump_threads(void);
+                extern void audio_guard_report(const char *when);
+                kernel_dump_threads(), audio_guard_report("no course scene");
+            }
         }
         if (awaiting_next && next_menu_since && now - next_menu_since > 300) {
             // back on the menu after a clear and no map walk: Quit on the result screen, the run is kept
@@ -621,7 +644,7 @@ static void fade_black(Cpu *c) {
 #define MENU_COURSEIN_EXEC MAIN_ADDR(0x1a258f0)
 #define PLAY_LIST_DOWNLOAD_ENTER MAIN_ADDR(0x1bbb820)
 #define PLAY_DATA_DOWNLOAD_ENTER MAIN_ADDR(0x1bbb9a0)
-static volatile bool course_scene_due;  // the CourseIn was let go: the next course scene goes to the flow
+// (course_scene_due, above: the CourseIn was let go, the next course scene goes to the flow)
 __attribute__((weak)) void hundred_flow_course_in(void) {}
 
 static void menu_course_in(Cpu *c) {
@@ -635,13 +658,17 @@ static void menu_course_in(Cpu *c) {
             held = false, course_scene_due = true;
             LOG("[mod] bridge: SMM2 leaves its map for the course\n");
             mod_burst("courseIn", 480);
+            left_map_at = renderer_present_count(), course_in_runs = course_in_posts = 0;
         }
     }
+    uint64_t q = left_map_at ? g64(UI_QUEUE) : 0;
+    int queued = q ? (int)g32(q + 0x578) : 0;
     guest_call_orig(c, MENU_COURSEIN_EXEC);
+    if (q) course_in_runs++, course_in_posts += (int)g32(q + 0x578) > queued;
 }
 static void course_scene(const char *why) {
     if (!course_scene_due) return;
-    course_scene_due = false;
+    course_scene_due = false, left_map_at = 0;
     LOG("[mod] bridge: SMM2's course scene (%s): its card comes\n", why);
     if (test_difficulty() < 0) hundred_flow_course_in();
 }
