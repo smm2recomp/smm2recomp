@@ -181,7 +181,26 @@ static void create_device(void) {
     // through its device address instead (bufferDeviceAddress: part of Vulkan 1.3). Without host memory import there is
     // no heap on the GPU at all: draw stages then read per-draw copies of their storage buffers (exec.c gfx_gmap).
     // LARECOMP_VK_NO_BDA=1: the old storage buffer binding; LARECOMP_VK_NO_GMEM=1: no import (the per-draw copies).
-    bool no_gmem = !g_vk.host_import || getenv("LARECOMP_VK_NO_GMEM");
+    // The import lands in host-visible memory. Where the largest heap holding host-visible memory is device-local (an
+    // integrated GPU sharing one heap with the system, e.g. Intel UHD / HD with 8 GB of RAM: ~4 GB), the 3.2 GB import
+    // takes most of the budget textures and render targets need, and image creation then fails with
+    // VK_ERROR_OUT_OF_DEVICE_MEMORY (#57). There the per-draw copies are used. Discrete GPUs (and the Steam Deck) keep
+    // the import: it sits in their separate system memory heap, not in the GPU's own memory.
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mem_props);
+    int host_heap = -1;
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
+        uint32_t h = mem_props.memoryTypes[i].heapIndex;
+        if ((mem_props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) &&
+            (host_heap < 0 || mem_props.memoryHeaps[h].size > mem_props.memoryHeaps[host_heap].size))
+            host_heap = (int)h;
+    }
+    bool low_vram = host_heap >= 0 && (mem_props.memoryHeaps[host_heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+                    mem_props.memoryHeaps[host_heap].size < HEAP_MAX + (3ull << 30);
+    if (low_vram && g_vk.host_import)
+        LOG("[vk] shared GPU memory is %llu MB: the guest heap is not imported (it would leave too little for textures)\n",
+            (unsigned long long)(mem_props.memoryHeaps[host_heap].size >> 20));
+    bool no_gmem = !g_vk.host_import || low_vram || getenv("LARECOMP_VK_NO_GMEM");
     g_vk.bda = have12.bufferDeviceAddress && have.features.shaderInt64 && !no_gmem && !getenv("LARECOMP_VK_NO_BDA");
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,

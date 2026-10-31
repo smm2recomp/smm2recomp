@@ -337,13 +337,28 @@ static void create_image(NvnTexture *t, TexBackend *b) {
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     VkResult r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+    if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        vk_collect_dead();
+        r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+        if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+        }
+    }
     if (r != VK_SUCCESS) {
         LOG("[vk] image creation failed (%d): nvn fmt %#x %ux%ux%u target %u\n", r, t->format, t->width, t->height, t->depth, t->target);
         ci.format = vf = VK_FORMAT_R8G8B8A8_UNORM;
         ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
         ci.flags &= ~VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
-        VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
+        ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+        if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+            vk_collect_dead();
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+        }
+        VK_CHECK(r);
         depthfmt = false;
     }
     b->format = vf;
@@ -437,6 +452,7 @@ static TexBackend *tex_backend(NvnTexture *t) {
     if (b) {
         if (b->scalable && (b->sx != g_rs_x || b->sy != g_rs_y)) {  // output resolution changed: reallocate
             destroy_image(b);
+            vk_collect_dead();
             create_image(t, b);
         }
         return b;
