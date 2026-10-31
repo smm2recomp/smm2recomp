@@ -1,12 +1,15 @@
 // nn::pl shared system fonts. The Switch's system fonts are not part of the game; in order of preference:
 //  1. LARECOMP_FONT=<file> (.ttf / .otf / .ttc face 0 / .bfttf)
 //  2. a dump from the user's own console in fonts/: nintendo_udsg-r_std_003.bfttf (Standard, Morisawa UD Shin Go)
-//     and nintendo_ext_003.bfttf (NintendoExt button glyphs); plain .ttf versions of those names also work
+//     and nintendo_ext_003.bfttf (NintendoExt button glyphs); plain .ttf versions of those names also work.
+//     The Chinese and Korean shared fonts (the game falls back to them for characters the Standard font lacks, e.g.
+//     simplified Chinese course names) are loaded the first time the game asks for them, from the same folder
 //  3. a Japanese gothic like UD Shin Go (much closer to the game's look than Arial): Hiragino Sans W4 on macOS,
 //     Yu Gothic Regular / Medium on Windows
 //  4. Arial
 // .bfttf is the console's obfuscated TTF: 8-byte header (magic, size) then every u32 XORed with a fixed key.
 // .ttc collections get face 0 copied out as a standalone font (the game's font engine wants one sfnt).
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -14,7 +17,14 @@
 #include "../hle.h"
 
 typedef struct { uint64_t addr, size; } Font;
-static Font fonts[2];  // [0] Standard (every type), [1] NintendoExt when a dump provides it
+// Indexed by SharedFontType: 0 Standard, 1 ChineseSimple, 2 ChineseSimpleExt, 3 ChineseTraditional, 4 Korean,
+// 5 NintendoExt. A slot without a font (no dump, or the file is missing) answers with the Standard one.
+#define NFONTS 6
+static Font fonts[NFONTS];
+static uint8_t font_tried[NFONTS];
+static const char *const dump_name[NFONTS] = {
+    "nintendo_udsg-r_std_003",          "nintendo_udsg-r_org_zh-cn_003", "nintendo_udsg-r_ext_zh-cn_003",
+    "nintendo_udjxh-db_zh-tw_003",      "nintendo_udsg-r_ko_003",        "nintendo_ext_003"};
 
 static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | p[1] << 16 | p[2] << 8 | p[3]; }
 static void put32(uint8_t *p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
@@ -105,7 +115,23 @@ static int load_one(const char *path, Font *ft) {
 }
 
 static int g_fonts_loaded;
-RT_ON_RESET(pl_reset) { g_fonts_loaded = 0; memset(fonts, 0, sizeof fonts); }  // (they were in the HLE heap)
+RT_ON_RESET(pl_reset) {  // (they were in the HLE heap)
+    g_fonts_loaded = 0;
+    memset(fonts, 0, sizeof fonts);
+    memset(font_tried, 0, sizeof font_tried);
+}
+
+// The console's font of this type from the dump (fonts/<name>.bfttf, or .ttf), loaded once
+static void load_dump_font(unsigned type) {
+    if (font_tried[type]) return;
+    font_tried[type] = 1;
+    char path[96];
+    snprintf(path, sizeof path, "fonts/%s.bfttf", dump_name[type]);
+    if (!load_one(path, &fonts[type])) {
+        snprintf(path, sizeof path, "fonts/%s.ttf", dump_name[type]);
+        load_one(path, &fonts[type]);
+    }
+}
 
 static void load_fonts(void) {
     if (g_fonts_loaded) return;
@@ -123,13 +149,17 @@ static void load_fonts(void) {
     for (size_t i = 0; i < sizeof std / sizeof *std && !fonts[0].addr; i++)
         if (std[i]) load_one(std[i], &fonts[0]);
     if (!fonts[0].addr) FATAL("no usable system font substitute\n");
-    if (!load_one("fonts/nintendo_ext_003.bfttf", &fonts[1])) load_one("fonts/nintendo_ext_003.ttf", &fonts[1]);
+    font_tried[0] = 1;
+    load_dump_font(5);
 }
 
-// SharedFontType: 0 Standard, 1 ChineseSimple, 2 ChineseSimpleExt, 3 ChineseTraditional, 4 Korean, 5 NintendoExt
 static const Font *font_for(uint64_t type) {
     load_fonts();
-    return type == 5 && fonts[1].addr ? &fonts[1] : &fonts[0];
+    if (type >= 1 && type < NFONTS) {
+        load_dump_font((unsigned)type);
+        if (fonts[type].addr) return &fonts[type];
+    }
+    return &fonts[0];
 }
 
 HLE_FUNC("_ZN2nn2pl21RequestSharedFontLoadENS0_14SharedFontTypeE", pl_request_load) { (void)c; }  // (always loaded)
