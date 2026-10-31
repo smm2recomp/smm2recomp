@@ -1,6 +1,15 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **After v0.6.0 (2026-10-31, on main):** PR #57 merged (ElDeluxo: Vulkan texture allocation retries, then host
+  memory; the guest heap not imported on integrated GPUs whose one shared heap is under heap + 3 GB - narrowed from
+  "any integrated / <=4 GB GPU" so discrete 4 GB cards and the Steam Deck keep the import; cross-compiled locally, CI
+  doesn't build the runtime). The owner's iPad black screens on loading a course (twice, long sessions, both right
+  after Next on a result screen): the course had downloaded, the map scene kept drawing at 60 fps, the CourseIn state
+  ran, the play scene never came - not the server. Watchdog added (bridge: "no course scene 10 s after leaving the
+  map" + thread dump); iPad on build 410 "v0.6.0-diag" with it, waiting for the next occurrence's log. Not reproduced
+  on the Mac (a 45-min autoplay run: few clears, so few map exits). GitHub replies drafted, not posted (owner's OK):
+  #56 + #34 (same Intel driver crash, igvk64.dll+5cfab2: a newer Intel driver fixed #34), #58 (texts: ask for a log).
 - **Released v0.6.0 (2026-10-31)** (https://github.com/smm2recomp/smm2recomp/releases/tag/v0.6.0): everything of the
   2026-10-30/31 rounds below, plus Frame generation "120 fps (replay)" (Apple, off by default: the frame drawn again
   with uniforms halfway), SMM1 mods One-way wall ledge and Fire Flower wall climb (not yet tried in play). Mac 0.6.0 in
