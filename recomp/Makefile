@@ -392,6 +392,7 @@ RECOMP_VERSION ?= $(shell git describe --tags --match 'v[0-9]*' 2>/dev/null || e
 $(B)/rt/ui/launcher.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'
 $(B)/rt/ui/menu.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'  # (the menu's About row)
 $(B)/rt/ui/launcher.o: runtime/gamebuild.h runtime/paths.h
+$(B)/rt/services/am.o: RTFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'  # (the Game tab's version display toggle)
 
 $(B)/imgui/%.o: $(IMGUI)/%.cpp
 	@mkdir -p $(dir $@)

@@ -67,6 +67,7 @@ typedef struct {
     int hearts;          // index into g_heart_colours (0 = Default red)
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
     bool skip_intro;     // skip the boot logo presentation animations
+    bool show_recomp_version; // the title screen's Ver. box shows the recomp's version, not the game's: services/am.c
     int theme;           // THEME_*: the look of the menu (Video tab > Theme)
     bool ahead_fast;     // prepare shaders at full speed (all cores, no waiting for quiet moments): Video > Shaders
 } Settings;

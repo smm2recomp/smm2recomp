@@ -704,6 +704,11 @@ static void tab_display(void) {
                    "Skips the opening logos and goes straight to the title screen when the game starts.")) {
         settings_save();
     }
+    if (opt_toggle("Show recomp version", &g_settings.show_recomp_version, false,
+                   "Off: the title screen's Ver. box shows the game's own version (3.0.3). On: it shows this "
+                   "recomp's version instead. Takes effect the next time the title screen loads.")) {
+        settings_save();
+    }
 #ifdef GAME_LA_SETTINGS  // (Link's Awakening's, from the runtime this one shares: nothing in other games)
     opt_toggle("Remove blur", &g_settings.blur_removal, false,
                "Turns off the tilt-shift blur at the top and bottom of the screen.");

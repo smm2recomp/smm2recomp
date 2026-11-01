@@ -23,6 +23,7 @@ Settings g_settings = {
     .reverb = true,
     .movie_audio = true,
     .skip_intro = false,
+    .show_recomp_version = false,
     .show_fps = false,
     .show_memory = false,
     .inv_keys = true,
@@ -100,6 +101,7 @@ void settings_load(void) {
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
         else if (!strcmp(key, "skip_intro")) g_settings.skip_intro = atoi(val) != 0;
+        else if (!strcmp(key, "show_recomp_version")) g_settings.show_recomp_version = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
         else if (!strcmp(key, "ahead_fast")) g_settings.ahead_fast = atoi(val) != 0;
@@ -169,6 +171,7 @@ void settings_save(void) {
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "skip_intro = %d\n", g_settings.skip_intro);
+    fprintf(f, "show_recomp_version = %d\n", g_settings.show_recomp_version);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
     fprintf(f, "ahead_fast = %d\n", g_settings.ahead_fast);

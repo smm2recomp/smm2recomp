@@ -8,6 +8,18 @@
 #include "../net/nextendo.h"
 #include "../settings.h"
 
+// The recomp's own release, for the setting "show_recomp_version" (title screen's Ver. box, GetDisplayVersion below).
+// It is filled in by the Makefile, which compiles this file with -DRECOMP_VERSION='"<tag>"': release builds pass
+// RECOMP_VERSION=<tag> (e.g. v0.6.5), else git's description of the checkout, else "dev". So each release only has to
+// be built from its tag (or with RECOMP_VERSION=<tag>); nothing here needs editing per release. Limits of the value:
+//  - the game's version buffer is 0x10 bytes: at most 15 characters + NUL, longer text is cut off (a tag is fine; a
+//    dev build's description like v0.6.5-12-g1a2b3c4 is 17 characters and loses its end);
+//  - a leading "v" is dropped, the box already says "Ver.";
+//  - it is drawn as plain text in the title screen's Ver. box (tested with 0.6.5): much longer text may not fit it.
+#ifndef RECOMP_VERSION
+#define RECOMP_VERSION "dev"
+#endif
+
 #define AM_NO_MESSAGE MAKE_RESULT(128, 3)
 #define AM_NO_DATA MAKE_RESULT(128, 2)
 
@@ -284,7 +296,9 @@ static void application_functions(Service *s, IpcReq *req, IpcResp *resp) {
     }
     case 23:  // GetDisplayVersion (the title screen shows it)
         memset(resp->data, 0, 0x10);
-        snprintf((char *)resp->data, 0x10, "%s", GAME_DISPLAY_VERSION);
+        // setting show_recomp_version: the recomp's release (RECOMP_VERSION without its "v") instead of the game's
+        snprintf((char *)resp->data, 0x10, "%s",
+                 g_settings.show_recomp_version ? RECOMP_VERSION + (RECOMP_VERSION[0] == 'v') : GAME_DISPLAY_VERSION);
         resp_size(resp, 0x10);
         break;
     case 40: OUT(uint8_t, 0) = 0; resp_size(resp, 1); break;  // NotifyRunning
