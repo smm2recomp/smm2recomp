@@ -133,12 +133,12 @@ bool ocw_active(void) { return g_ocw.active; }
 // ---- Play History (My Info and a maker's page): the game's own GetUsers record comes from OCW's NEX side with no play
 // statistics, so they are filled in from OCW's REST API, which lists every course a maker played with their own
 // tries, deaths and clears:  GET https://<domain>/api/makers/<maker id>/played?offset=0&size=10000  (public: no token
-// is sent). The user record (0x1f0 bytes, world.c) holds the four numbers the screen shows at +0xfc: courses played,
-// courses cleared, attempts, lives lost. The maker is read from the record the game just got (maker code +0x08, UTF-16
+// is sent). The user record (0x1f0 bytes, world.c) holds the four numbers the screen shows at +0x100: courses played,
+// attempts, courses cleared, lives lost. The maker is read from the record the game just got (maker code +0x08, UTF-16
 // without dashes), so the player's own record and any maker's page work alike. A failed request leaves the record
 // exactly as the game wrote it.
 #define OCW_USER_RING 0x68  // the user ring in the network-session object (online.c USER_RING)
-#define OCW_STATS_OFF 0xfc  // plays, clears, attempts, deaths (u32 each)
+#define OCW_STATS_OFF 0x100  // courses played, attempts, courses cleared, lives lost (u32 each; checked on screen)
 #define OCW_REST_TIMEOUT_MS 8000
 
 // The maker ID ("AAA-BBB-CCC") of a user record, from its code; false when the record has none.
@@ -203,7 +203,8 @@ void ocw_fill_play_stats(Cpu *c, uint64_t no, uint64_t ret) {
         netobj_lock(c);
         e = g64(no + OCW_USER_RING);
         if (e && record_maker_id(e, again) && !strcmp(id, again))
-            for (int i = 0; i < 4; i++) s32(e + OCW_STATS_OFF + 4 * i, totals[i]);
+            s32(e + OCW_STATS_OFF, totals[0]), s32(e + OCW_STATS_OFF + 4, totals[2]), s32(e + OCW_STATS_OFF + 8, totals[1]),
+                s32(e + OCW_STATS_OFF + 12, totals[3]);
         netobj_unlock(c);
         LOG("[ocw] play history of %s: %u played, %u cleared, %u attempts, %u lives lost\n", id, totals[0], totals[1],
             totals[2], totals[3]);
