@@ -797,23 +797,30 @@ static const char *app_version(void) {
     return v;
 }
 static void tab_quit(float scale, bool in_game) {
-    static int ask;  // 0: the two choices; 1: start screen?; 2: desktop?
+    static int ask;  // 0: the choices; 1: start screen?; 2: desktop?; 3: restart?
     if (ask && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
         ask = 0;
     const char *lost = in_game ? "\n\nProgress since your last save is lost." : "";
-    char d1[200], d2[200];
+    char d0[200], d1[200], d2[200];
+    snprintf(d0, sizeof d0, "Starts the game again right away, without going through the start screen or closing the app.%s", lost);
     snprintf(d1, sizeof d1, "Leaves the game and goes back to the start screen.%s", lost);
     snprintf(d2, sizeof d2, "Closes " GAME_TITLE ".%s", lost);
     opt_begin("##quit", scale);
     opt_section("Quit");
     if (!ask) {
+        if (!in_game) opt_disable_next();  // (nothing running to restart)
+        if (opt_action("Restart the Game", "", in_game ? d0 : "No game is running.")) ask = 3;
         if (!in_game) opt_disable_next();  // (already on it)
         if (opt_action("Quit to Start Screen", "", in_game ? d1 : "You're on the start screen.")) ask = 1;
         if (opt_action("Quit to Desktop", "", d2)) ask = 2;
     } else {
-        if (opt_action(ask == 1 ? "Yes, quit to Start Screen" : "Yes, quit to Desktop", "", ask == 1 ? d1 : d2)) {
+        if (opt_action(ask == 3 ? "Yes, restart the game" : ask == 1 ? "Yes, quit to Start Screen" : "Yes, quit to Desktop",
+                       "", ask == 3 ? d0 : ask == 1 ? d1 : d2)) {
             settings_save();
-            if (ask == 1) {
+            if (ask == 3) {
+                rt_request_reboot(1 /* RT_REBOOT_GAME */);
+                set_open(false);
+            } else if (ask == 1) {
                 rt_request_reboot(2);
                 set_open(false);
             } else {
