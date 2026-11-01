@@ -155,7 +155,31 @@ static bool record_maker_id(uint64_t e, char out[12]) {
     return true;
 }
 
-// {played, cleared, attempts, lives lost} of the maker's played list; false when the request or its answer failed.
+// {played, cleared, attempts, lives lost} from the maker's own record (GET /api/makers/<id>: stats plays / clears / tries /
+// deaths, the server's totals over every course); false when the request fails or the record has no stats.
+static bool fetch_maker_totals(const char *maker_id, uint32_t totals[4]) {
+    char url[256];
+    snprintf(url, sizeof url, "https://%s/api/makers/%s", g_ocw.domain, maker_id);
+    HttpResponse r;
+    kernel_host_wait_begin();
+    int st = http_request("GET", url, "Accept: application/json\r\n", NULL, 0, OCW_REST_TIMEOUT_MS, &r);
+    kernel_host_wait_end();
+    Json *m = st == 200 ? json_parse(r.body, r.len) : NULL;
+    http_free(&r);
+    const Json *stats = m ? json_get(m, "stats") : NULL;
+    bool ok = stats && stats->type == JSON_OBJ;
+    if (ok) {
+        totals[0] = (uint32_t)json_num(json_get(stats, "plays"), 0);
+        totals[1] = (uint32_t)json_num(json_get(stats, "clears"), 0);
+        totals[2] = (uint32_t)json_num(json_get(stats, "tries"), 0);
+        totals[3] = (uint32_t)json_num(json_get(stats, "deaths"), 0);
+    }
+    json_free(m);
+    return ok;
+}
+
+// Fallback: the totals of the maker's played list (the server returns at most 100 entries per request, so this undercounts
+// a maker who played more).
 static bool fetch_play_totals(const char *maker_id, uint32_t totals[4]) {
     char url[256];
     snprintf(url, sizeof url, "https://%s/api/makers/%s/played?offset=0&size=10000", g_ocw.domain, maker_id);
@@ -199,7 +223,7 @@ void ocw_fill_play_stats(Cpu *c, uint64_t no, uint64_t ret) {
     bool known = e && record_maker_id(e, id);
     netobj_unlock(c);
     uint32_t totals[4];
-    if (known && fetch_play_totals(id, totals)) {  // (outside the lock: HTTP)
+    if (known && (fetch_maker_totals(id, totals) || fetch_play_totals(id, totals))) {  // (outside the lock: HTTP)
         netobj_lock(c);
         e = g64(no + OCW_USER_RING);
         if (e && record_maker_id(e, again) && !strcmp(id, again))
