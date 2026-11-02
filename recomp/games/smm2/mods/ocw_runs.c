@@ -1,26 +1,32 @@
-// The 100 Mario Challenge's runs for backend=ocw (mods/hybrid.h): OCW has no Endless Challenge, so the runs are kept
+// The Endless Challenge's and 100 Mario's runs for backend=ocw (mods/hybrid.h): OCW has neither, so the runs are kept
 // here, in the game, and the courses are drawn from OCW's public course list. The mod's Endless overrides (endless.c)
 // speak to a course server in a small REST dialect (core/crates/server /api/endless ...); with backend=ocw
 // server.c hands those requests to ocw_runs_request() instead of a socket, and this file answers them:
 //
 //   GET  /api/me                       the player's name
-//   GET  /api/endless                  the four runs (runs: SMM2's, none here; hundred_runs: 100 Mario's)
-//   POST /api/endless/<d>/start        New Game: 100 lives, the difficulty's goal, a fresh queue of courses
+//   GET  /api/endless                  the four runs of each mode (runs: SMM2's; hundred_runs: 100 Mario's) and the best clears
+//   POST /api/endless/<d>/start        New Game (?ruleset=hundred | smm2): the start lives, a fresh queue of courses
 //   GET  /api/endless/<d>/next?count=  the first courses of the run's queue
 //   POST /api/endless/<d>/result       {"code", "result": clear | death | start_over | skip | broken, "pending"}
 //   POST /api/endless/<d>/suspend | finish
 //   GET  /api/endless/<d>/history      the run's clears and skips (the map's dots, the ending's credits)
 //   GET  /api/rankings/hundred_<d>     completed runs of this difficulty (unlocks Expert and Super Expert)
+//   GET  /api/rankings/endless_<d>     SMM2's best clears on this difficulty
 //   GET  /api/courses/<code>           a course served in this session (its record)
 //
-// The rules are the server's (core/crates/modes/src/hundred.rs, endless.rs): 100 lives; a death costs one; a clear
-// adds the banked 1-Ups (at most 3); a skip is free; the run is complete at the difficulty's goal (8, 16, 16, 6
-// clears) and over at no lives. The courses come from OCW's /api/latest/courses, picked like the server's
-// pick_hundred: by SMM1's fail-rate bands (Easy 0-34, Normal 0-74, Expert 75-95, Super Expert 96-100) over the courses
-// rated by their attempts, widening to any rated one, then unrated ones. Their files are the game's own downloads
-// from OCW (endless.c leaves GetObject to the game), so a course is only ever named here by its code.
+// Both Endless modes are served, each in its own run slots (the request's ruleset=): 100 Mario and SMM2's Endless
+// Challenge. The rules are the server's (core/crates/modes/src/hundred.rs, endless.rs).
+//   100 Mario: 100 lives; a death costs one; a clear adds the banked 1-Ups (at most 3); a skip is free; the run is
+//   complete at the difficulty's goal (8, 16, 16, 6 clears) and over at no lives. Courses by SMM1's fail-rate bands
+//   (Easy 0-34, Normal 0-74, Expert 75-95, Super Expert 96-100) over the courses rated by their attempts, widening to
+//   any rated one, then unrated ones (the server's pick_hundred).
+//   SMM2: 5 lives (at most 99), no goal; a clear adds the banked 1-Ups; a skip costs a life only during the miss
+//   demo; the best clears per difficulty are kept. Courses by clear-rate band (Easy 34% and up, Normal 12%, Expert
+//   3%, else Super Expert), widening to the bands one, two, three steps away, then unrated ones (pick).
+// The courses come from OCW's /api/latest/courses. Their files are the game's own downloads from OCW (endless.c leaves
+// GetObject to the game), so a course is only ever named here by its code.
 //
-// The runs and the completed-run counts are kept in ocw-100mario.json in the data folder.
+// The runs, the completed-run counts and the best clears are kept in ocw-100mario.json in the data folder.
 #include <ctype.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -70,8 +76,19 @@ typedef struct {
 } Run;
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-static Run runs[4];
-static unsigned completed[4];
+static Run runs[4];        // 100 Mario's run per difficulty
+static Run smm2_runs[4];   // SMM2's Endless Challenge's
+static unsigned completed[4];    // completed 100 Mario runs
+static unsigned best_clears[4];  // SMM2's best clears
+static Run *slots(bool hundred) { return hundred ? runs : smm2_runs; }
+static int goal_of(bool hundred, int d) { return hundred ? GOAL[d] : 0; }
+// The band of a rated course by its clear rate (SMM2's: Easy 34% and up, Normal 12%, Expert 3%, else Super Expert);
+// -1: unrated
+static int smm2_band(const Course *c) {
+    if (c->attempts < MIN_RATED) return -1;
+    unsigned bp = (unsigned)((c->clears < c->attempts ? c->clears : c->attempts) * 10000ull / c->attempts);
+    return bp >= 3400 ? 0 : bp >= 1200 ? 1 : bp >= 300 ? 2 : 3;
+}
 static bool loaded;
 
 // ---- OCW's course list
@@ -183,20 +200,29 @@ static bool in_run(const Run *r, const char *code) {
     return false;
 }
 
-// Top the run's queue up from the pool by the pick_hundred tiers (lock held; may fetch).
-static void refill(Run *r, int d) {
+// Top the run's queue up from the pool (lock held; may fetch). 100 Mario: pick_hundred's tiers (SMM1's fail-rate band,
+// any rated course, unrated ones). SMM2: pick's (the difficulty's band, the bands one, two, three steps away, then
+// unrated ones).
+static void refill(Run *r, int d, bool hundred) {
     if (r->nqueue >= QUEUE_AHEAD) return;
+    int tiers = hundred ? 3 : 5;
     pthread_mutex_lock(&pool_lock);
     for (int round = 0; round < 3 && r->nqueue < QUEUE_AHEAD; round++) {
-        for (int tier = 0; tier < 3 && r->nqueue < QUEUE_AHEAD; tier++) {
+        for (int tier = 0; tier < tiers && r->nqueue < QUEUE_AHEAD; tier++) {
             int idx[2048], n = 0;
             for (int i = 0; i < npool && n < 2048; i++) {
                 const Course *c = &pool[i];
                 if (!c->endless || in_run(r, c->code)) continue;
-                bool rated = c->attempts >= MIN_RATED;
-                int fail = rated ? 100 - (int)(c->clears * 100ull / c->attempts) : 0;
-                if (tier == 0 ? rated && fail >= BAND[d][0] && fail <= BAND[d][1] : tier == 1 ? rated : !rated)
-                    idx[n++] = i;
+                bool ok;
+                if (hundred) {
+                    bool rated = c->attempts >= MIN_RATED;
+                    int fail = rated ? 100 - (int)(c->clears * 100ull / c->attempts) : 0;
+                    ok = tier == 0 ? rated && fail >= BAND[d][0] && fail <= BAND[d][1] : tier == 1 ? rated : !rated;
+                } else {
+                    int band = smm2_band(c);
+                    ok = tier == 4 ? band < 0 : band >= 0 && (band == d - tier || band == d + tier);
+                }
+                if (ok) idx[n++] = i;
             }
             while (n > 0 && r->nqueue < QUEUE_AHEAD) {
                 int k = (int)rnd((unsigned)n);
@@ -235,12 +261,10 @@ static void put_course(FILE *f, const Course *c) {
             c->style, c->theme, c->uploaded, c->plays, c->attempts, c->clears, c->likes);
 }
 
-static void save(void) {  // (lock held)
-    FILE *f = fopen(SAVE_FILE, "wb");
-    if (!f) return;
-    fprintf(f, "{\"completed\":[%u,%u,%u,%u],\"runs\":[", completed[0], completed[1], completed[2], completed[3]);
+static void put_runs(FILE *f, const Run *rs) {
+    fputc('[', f);
     for (int d = 0; d < 4; d++) {
-        const Run *r = &runs[d];
+        const Run *r = &rs[d];
         fprintf(f, "%s{\"exists\":%d,\"active\":%d,\"complete\":%d,\"lives\":%u,\"clears\":%u,\"coins\":%u,\"score\":%u,"
                    "\"seq\":%u,\"queue\":[", d ? "," : "", r->exists, r->active, r->complete, r->lives, r->clears,
                 r->coins, r->score, r->seq);
@@ -257,7 +281,18 @@ static void save(void) {  // (lock held)
         }
         fputs("]}", f);
     }
-    fputs("]}\n", f);
+    fputc(']', f);
+}
+
+static void save(void) {  // (lock held)
+    FILE *f = fopen(SAVE_FILE, "wb");
+    if (!f) return;
+    fprintf(f, "{\"completed\":[%u,%u,%u,%u],\"best\":[%u,%u,%u,%u],\"runs\":", completed[0], completed[1], completed[2],
+            completed[3], best_clears[0], best_clears[1], best_clears[2], best_clears[3]);
+    put_runs(f, runs);
+    fputs(",\"smm2_runs\":", f);
+    put_runs(f, smm2_runs);
+    fputs("}\n", f);
     fclose(f);
 }
 
@@ -274,6 +309,27 @@ static void course_from_save(const Json *j, Course *c) {
     c->endless = true;
 }
 
+static void get_runs(const Json *arr, Run *rs) {
+    for (int d = 0; d < 4; d++) {
+        Json *o = json_at(arr, (size_t)d);
+        if (!o) continue;
+        Run *r = &rs[d];
+        r->exists = json_bool(json_get(o, "exists"), false), r->active = json_bool(json_get(o, "active"), false);
+        r->complete = json_bool(json_get(o, "complete"), false);
+        r->lives = (unsigned)json_num(json_get(o, "lives"), 0), r->clears = (unsigned)json_num(json_get(o, "clears"), 0);
+        r->coins = (unsigned)json_num(json_get(o, "coins"), 0), r->score = (unsigned)json_num(json_get(o, "score"), 0);
+        r->seq = (unsigned)json_num(json_get(o, "seq"), 0);
+        Json *q = json_get(o, "queue"), *h = json_get(o, "history");
+        for (size_t i = 0; i < json_len(q) && r->nqueue < QUEUE_AHEAD; i++) course_from_save(json_at(q, i), &r->queue[r->nqueue++]);
+        for (size_t i = 0; i < json_len(h) && r->nhist < HISTORY_MAX; i++) {
+            Json *e = json_at(h, i);
+            Done *dn = &r->hist[r->nhist++];
+            course_from_save(json_get(e, "c"), &dn->c);
+            dn->clear = json_bool(json_get(e, "clear"), false), dn->seq = (unsigned)json_num(json_get(e, "seq"), 0);
+        }
+    }
+}
+
 static void load(void) {  // (lock held, once)
     if (loaded) return;
     loaded = true;
@@ -287,23 +343,10 @@ static void load(void) {  // (lock held, once)
         Json *j = json_parse(buf, (size_t)n);
         for (int d = 0; d < 4; d++) {
             completed[d] = (unsigned)json_num(json_at(json_get(j, "completed"), (size_t)d), 0);
-            Json *o = json_at(json_get(j, "runs"), (size_t)d);
-            if (!o) continue;
-            Run *r = &runs[d];
-            r->exists = json_bool(json_get(o, "exists"), false), r->active = json_bool(json_get(o, "active"), false);
-            r->complete = json_bool(json_get(o, "complete"), false);
-            r->lives = (unsigned)json_num(json_get(o, "lives"), 0), r->clears = (unsigned)json_num(json_get(o, "clears"), 0);
-            r->coins = (unsigned)json_num(json_get(o, "coins"), 0), r->score = (unsigned)json_num(json_get(o, "score"), 0);
-            r->seq = (unsigned)json_num(json_get(o, "seq"), 0);
-            Json *q = json_get(o, "queue"), *h = json_get(o, "history");
-            for (size_t i = 0; i < json_len(q) && r->nqueue < QUEUE_AHEAD; i++) course_from_save(json_at(q, i), &r->queue[r->nqueue++]);
-            for (size_t i = 0; i < json_len(h) && r->nhist < HISTORY_MAX; i++) {
-                Json *e = json_at(h, i);
-                Done *dn = &r->hist[r->nhist++];
-                course_from_save(json_get(e, "c"), &dn->c);
-                dn->clear = json_bool(json_get(e, "clear"), false), dn->seq = (unsigned)json_num(json_get(e, "seq"), 0);
-            }
+            best_clears[d] = (unsigned)json_num(json_at(json_get(j, "best"), (size_t)d), 0);
         }
+        get_runs(json_get(j, "runs"), runs);
+        get_runs(json_get(j, "smm2_runs"), smm2_runs);
         json_free(j);
     }
     free(buf);
@@ -354,9 +397,9 @@ static void bcourse(Buf *b, const Course *c) {
          styles[c->style % 5], c->theme, c->uploaded, c->plays, c->attempts, c->clears, c->likes);
 }
 
-static void brun(Buf *b, const Run *r, int d) {
+static void brun(Buf *b, const Run *r, int goal) {
     bput(b, "{\"active\":%s,\"complete\":%s,\"lives\":%u,\"clears\":%u,\"coins\":%u,\"score\":%u,\"goal\":%d}",
-         r->active ? "true" : "false", r->complete ? "true" : "false", r->lives, r->clears, r->coins, r->score, GOAL[d]);
+         r->active ? "true" : "false", r->complete ? "true" : "false", r->lives, r->clears, r->coins, r->score, goal);
 }
 
 static int reply(HttpResponse *r, int status, Buf *b) {
@@ -392,7 +435,7 @@ static void queue_remove(Run *r, int i) {
     r->nqueue--;
 }
 
-static int run_result(Run *r, int d, const char *body, HttpResponse *resp) {
+static int run_result(Run *r, int d, bool hundred, const char *body, HttpResponse *resp) {
     Json *j = json_parse(body ? body : "", body ? strlen(body) : 0);
     const char *code = json_str(json_get(j, "code"), ""), *what = json_str(json_get(j, "result"), "");
     unsigned pending = (unsigned)json_num(json_get(j, "pending"), 0);
@@ -406,16 +449,18 @@ static int run_result(Run *r, int d, const char *body, HttpResponse *resp) {
     bool game_over = false, done = false;
     if (!strcmp(what, "clear")) {
         r->lives += pending < PENDING_CAP ? pending : PENDING_CAP;
-        if (r->lives > 100) r->lives = 100;
+        if (r->lives > (hundred ? 100u : 99u)) r->lives = hundred ? 100u : 99u;
         r->clears++, r->coins += coins, r->score += score;
         push_done(r, &c, true);
         queue_remove(r, at);
-        done = r->clears >= (unsigned)GOAL[d];
+        done = hundred && r->clears >= (unsigned)GOAL[d];
     } else if (!strcmp(what, "death") || !strcmp(what, "start_over")) {
         r->lives = r->lives ? r->lives - 1 : 0;  // (the same course again: it stays at the head)
         if (at) { Course t = r->queue[at]; memmove(r->queue + 1, r->queue, sizeof(Course) * (size_t)at); r->queue[0] = t; }
     } else if (!strcmp(what, "skip")) {
-        push_done(r, &c, false);  // (free in SMM1's rules)
+        // (free in SMM1's rules; SMM2's charges one only during the miss demo)
+        if (!hundred && json_bool(json_get(j, "during_miss"), false) && r->lives) r->lives--;
+        push_done(r, &c, false);
         queue_remove(r, at);
     } else {  // broken, or any other: the course leaves the run
         queue_remove(r, at);
@@ -446,27 +491,31 @@ int ocw_runs_request(const char *method, const char *path, const char *body, siz
         status = reply(resp, 200, &b);
     } else if (get && !strncmp(path, "/api/endless", 12) && (!path[12] || path[12] == '?')) {
         bput(&b, "{\"runs\":{");
-        for (int d = 0; d < 4; d++) bput(&b, "%s\"%s\":{}", d ? "," : "", DIFF[d]);
+        for (int d = 0; d < 4; d++) {
+            bput(&b, "%s\"%s\":", d ? "," : "", DIFF[d]);
+            brun(&b, &smm2_runs[d], 0);
+        }
         bput(&b, "},\"hundred_runs\":{");
         for (int d = 0; d < 4; d++) {
             bput(&b, "%s\"%s\":", d ? "," : "", DIFF[d]);
-            brun(&b, &runs[d], d);
+            brun(&b, &runs[d], GOAL[d]);
         }
-        bput(&b, "},\"best\":{\"easy\":0,\"normal\":0,\"expert\":0,\"super_expert\":0}}");
+        bput(&b, "},\"best\":{");
+        for (int d = 0; d < 4; d++) bput(&b, "%s\"%s\":%u", d ? "," : "", DIFF[d], best_clears[d]);
+        bput(&b, "}}");
         status = reply(resp, 200, &b);
     } else if (!strncmp(path, "/api/endless/", 13) && parse_diff(path + 13) >= 0) {
         int d = parse_diff(path + 13);
-        Run *r = &runs[d];
+        bool hundred = !strstr(path, "ruleset=smm2");  // (the mod always says which)
+        Run *r = &slots(hundred)[d];
         const char *verb = path + 13 + strlen(DIFF[d]);
         if (*verb == '/') verb++;
-        if (strstr(path, "ruleset=smm2")) {
-            status = fail(resp, 400, "SMM2's Endless Challenge isn't served with backend ocw");
-        } else if (post && !strncmp(verb, "start", 5)) {
+        if (post && !strncmp(verb, "start", 5)) {
             memset(r, 0, sizeof *r);
-            r->exists = r->active = true, r->lives = 100;
-            refill(r, d);
+            r->exists = r->active = true, r->lives = hundred ? 100 : 5;
+            refill(r, d, hundred);
             save();
-            bput(&b, "{\"run\":{\"lives\":%u,\"goal\":%d}}", r->lives, GOAL[d]);
+            bput(&b, "{\"run\":{\"lives\":%u,\"goal\":%d}}", r->lives, goal_of(hundred, d));
             status = reply(resp, 200, &b);
         } else if (get && !strncmp(verb, "next", 4)) {
             const char *cp = strstr(path, "count=");
@@ -474,7 +523,7 @@ int ocw_runs_request(const char *method, const char *path, const char *body, siz
             if (!r->active) {
                 status = fail(resp, 404, "no run");
             } else {
-                refill(r, d);
+                refill(r, d, hundred);
                 if (count > r->nqueue) count = r->nqueue;
                 bput(&b, "{\"courses\":[");
                 for (int i = 0; i < count; i++) {
@@ -486,10 +535,13 @@ int ocw_runs_request(const char *method, const char *path, const char *body, siz
                 status = reply(resp, 200, &b);
             }
         } else if (post && !strncmp(verb, "result", 6)) {
-            status = run_result(r, d, body, resp);
-            if (r->active) refill(r, d);
+            status = run_result(r, d, hundred, body, resp);
+            if (r->active) refill(r, d, hundred);
         } else if (post && (!strncmp(verb, "suspend", 7) || !strncmp(verb, "finish", 6))) {
-            if (verb[0] == 'f') r->active = false;
+            if (verb[0] == 'f') {
+                r->active = false;
+                if (!hundred && r->clears > best_clears[d]) best_clears[d] = r->clears;  // (SMM2's best clears)
+            }
             save();
             bput(&b, "{}");
             status = reply(resp, 200, &b);
@@ -513,19 +565,21 @@ int ocw_runs_request(const char *method, const char *path, const char *body, siz
                 status = reply(resp, 200, &b);
             }
         }
-    } else if (get && !strncmp(path, "/api/rankings/hundred_", 22) && parse_diff(path + 22) >= 0) {
-        unsigned n = completed[parse_diff(path + 22)];
+    } else if (get && (!strncmp(path, "/api/rankings/hundred_", 22) || !strncmp(path, "/api/rankings/endless_", 22)) &&
+               parse_diff(path + 22) >= 0) {
+        unsigned n = (path[15] == 'h' ? completed : best_clears)[parse_diff(path + 22)];
         bput(&b, "{\"me\":{\"score\":%u,\"rank\":%u}}", n, n ? 1u : 0u);
         status = reply(resp, 200, &b);
     } else if (get && !strncmp(path, "/api/courses/", 13) && !strchr(path + 13, '/')) {
         char code[12];
         snprintf(code, sizeof code, "%.11s", path + 13);
         const Course *found = NULL;
-        for (int d = 0; d < 4 && !found; d++) {
-            for (int i = 0; i < runs[d].nqueue && !found; i++)
-                if (!strcmp(runs[d].queue[i].code, code)) found = &runs[d].queue[i];
-            for (int i = 0; i < runs[d].nhist && !found; i++)
-                if (!strcmp(runs[d].hist[i].c.code, code)) found = &runs[d].hist[i].c;
+        for (int k = 0; k < 8 && !found; k++) {
+            const Run *r = &(k < 4 ? runs : smm2_runs)[k & 3];
+            for (int i = 0; i < r->nqueue && !found; i++)
+                if (!strcmp(r->queue[i].code, code)) found = &r->queue[i];
+            for (int i = 0; i < r->nhist && !found; i++)
+                if (!strcmp(r->hist[i].c.code, code)) found = &r->hist[i].c;
         }
         if (found) bcourse(&b, found), status = reply(resp, 200, &b);
     }
