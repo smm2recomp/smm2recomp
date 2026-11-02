@@ -16,6 +16,8 @@ extern "C" const char *menu_clipboard(void);  // (menu.mm: the system clipboard'
 
 static float g_scale = 1;
 static std::string g_desc_hover, g_desc_focus, g_desc_shown;  // this frame's hovered / selected row, and the last shown
+struct DescImage { uint64_t tex = 0; int w = 0, h = 0; };
+static DescImage g_img_hover, g_img_focus, g_img_shown;
 static std::string g_desc_first;  // the page's first row (shown until a row is selected or hovered)
 
 // the menu theme's accent / caption colours (runtime/ui/menu.mm)
@@ -44,6 +46,7 @@ void opt_begin(const char *id, float scale) {
     if (g_take_first) ImGui::NavMoveRequestCancel();  // (this frame's Down goes to the first row instead)
     g_indent = 0;
     g_desc_hover.clear(), g_desc_focus.clear();
+    g_img_hover = g_img_focus = DescImage();
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImGui::PushID(id);
     ImGui::BeginChild("##rows", ImVec2(avail.x * 0.48f, avail.y), ImGuiChildFlags_None, ImGuiWindowFlags_NavFlattened);
@@ -245,6 +248,10 @@ bool opt_radio(const char *label, bool selected, const char *desc) {
     return chosen && !selected;
 }
 
+void opt_desc_image(uint64_t tex, int w, int h) {
+    if (ImGui::IsItemHovered()) g_img_hover = {tex, w, h};
+    if (ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible) g_img_focus = {tex, w, h};
+}
 bool opt_action(const char *label, const char *value, const char *desc, bool upper) {
     return row(label, value ? value : "", false, desc, upper) == 2;
 }
@@ -293,9 +300,9 @@ void opt_end(void) {
     if (const char *t = getenv("LARECOMP_OPT_SCROLL")) ImGui::SetScrollY(ImGui::GetScrollMaxY() * (float)atof(t));  // (test)
     ImGui::EndChild();
     // the description: the hovered row (mouse) wins, else the selected one (controller), else the last shown
-    if (!g_desc_hover.empty()) g_desc_shown = g_desc_hover;
-    else if (!g_desc_focus.empty()) g_desc_shown = g_desc_focus;
-    else if (g_desc_shown.empty()) g_desc_shown = g_desc_first;
+    if (!g_desc_hover.empty()) g_desc_shown = g_desc_hover, g_img_shown = g_img_hover;
+    else if (!g_desc_focus.empty()) g_desc_shown = g_desc_focus, g_img_shown = g_img_focus;
+    else if (g_desc_shown.empty()) g_desc_shown = g_desc_first, g_img_shown = DescImage();
     ImGui::SameLine(0, 0);
     ImVec2 p = ImGui::GetCursorScreenPos(), avail = ImGui::GetContentRegionAvail();
     float gap = 24 * g_scale;
@@ -314,6 +321,24 @@ void opt_end(void) {
     ImGui::PopStyleVar();
     if (nes) ImGui::PopStyleColor();
     ImGui::SetWindowFontScale(nes ? 1.0f : 1.3f);  // (the description reads at a glance)
+    if (g_img_shown.w != 0) {  // a picture, or its place while it loads (w < 0: it won't come): a fixed 16:9 box
+        ImVec2 room = ImGui::GetContentRegionAvail();
+        float bw = fminf(room.x, room.y * 0.5f * 16 / 9), bh = bw * 9 / 16;
+        ImVec2 p0 = ImGui::GetCursorScreenPos(), p1(p0.x + bw, p0.y + bh);
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, 110));
+        if (g_img_shown.tex && g_img_shown.w > 0) {  // (fitted inside the box)
+            float s = fminf(bw / g_img_shown.w, bh / g_img_shown.h), iw = g_img_shown.w * s, ih = g_img_shown.h * s;
+            ImVec2 q(p0.x + (bw - iw) / 2, p0.y + (bh - ih) / 2);
+            dl->AddImage((ImTextureID)g_img_shown.tex, q, ImVec2(q.x + iw, q.y + ih));
+        } else {
+            const char *t = g_img_shown.w < 0 ? "No screenshot" : "Loading screenshot...";
+            ImVec2 ts = ImGui::CalcTextSize(t);
+            dl->AddText(ImVec2(p0.x + (bw - ts.x) / 2, p0.y + (bh - ts.y) / 2), menu_muted(), t);
+        }
+        ImGui::Dummy(ImVec2(bw, bh));
+        ImGui::Spacing();
+    }
     ImGui::PushTextWrapPos(0);
     ImGui::TextUnformatted(g_desc_shown.c_str());
     ImGui::PopTextWrapPos();

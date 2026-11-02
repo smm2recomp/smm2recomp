@@ -7,6 +7,7 @@
 //   if (opt_toggle("One-hit KO", &g_settings.diff_ohko, false, "Any hit defeats Link.")) settings_save();
 //   opt_end();
 #pragma once
+#include <stdint.h>
 
 void opt_begin(const char *id, float scale);
 void opt_section(const char *title);
@@ -26,6 +27,9 @@ bool opt_radio(const char *label, bool selected, const char *desc);
 // an action / item row with a value on the right (upper: the label in capitals, as option rows; false: as written,
 // e.g. a seed name); true when activated
 bool opt_action(const char *label, const char *value, const char *desc, bool upper = true);
+// A picture (an ImTextureID, w x h) for the description pane of the row just drawn: shown above its text while that row is
+// the hovered / selected one.
+void opt_desc_image(uint64_t tex, int w, int h);
 // text: the value shown on the right (hint when empty); A / click turns the row into a text field (the on-screen
 // keyboard with a controller). True when Enter / the keyboard confirmed a change.
 #include <stddef.h>

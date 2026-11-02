@@ -15,6 +15,7 @@
 #include "platform.h"  // plat_remove_tree; (Windows: POSIX mkdir)
 #include "rt.h"
 #include "usermods.h"
+#include "../third_party/stb/stb_image.h"
 
 #define API "https://gamebanana.com/apiv11"
 #define MAX_LIST 100
@@ -31,6 +32,14 @@ static char g_list_msg[160];
 static char g_search[128];
 static bool g_want_list;
 
+static const char *const sort_alias[GB_NSORTS] = {"Generic_MostDownloaded", "Generic_MostLiked", "Generic_MostViewed",
+                                                   "Generic_Newest", "Generic_LatestModified"};
+const char *const gb_sort_names[GB_NSORTS] = {"Most downloaded", "Most liked", "Most viewed", "Newest", "Recently updated"};
+static int g_sort, g_cat;
+static GbCategory g_cats[32];
+static int g_ncats;
+static bool g_want_cats, g_cats_asked;
+
 static GbMod g_cache[64];  // details fetched
 static int g_ncache;
 static int g_want_details[16], g_nwant;
@@ -42,6 +51,10 @@ static int g_inst_id;
 static float g_inst_progress = -1;
 static char g_inst_msg[200];
 static volatile int g_cancel;
+
+#define MAX_IMG 24
+static struct { int id, idx; char url[128]; uint8_t *px; int w, h; int st; } g_img[MAX_IMG];  // st: 1 queued, 2 done, 3 failed
+static int g_nimg;
 
 bool gb_available(void) { return game_gamebanana_id() > 0; }
 
@@ -117,8 +130,14 @@ static void do_list(void) {
         snprintf(url, sizeof url, API "/Util/Search/Results?_sModelName=Mod&_sOrder=best_match&_idGameRow=%d&_sSearchString=%s"
                  "&_nPerpage=50", game_gamebanana_id(), q);
     } else {
-        snprintf(url, sizeof url, API "/Mod/Index?_nPerpage=50&_aFilters%%5BGeneric_Game%%5D=%d&_sSort=Generic_MostDownloaded",
-                 game_gamebanana_id());
+        int sort, cat;
+        pthread_mutex_lock(&g_lock);
+        sort = g_sort, cat = g_cat;
+        pthread_mutex_unlock(&g_lock);
+        snprintf(url, sizeof url, API "/Mod/Index?_nPerpage=50&_aFilters%%5BGeneric_Game%%5D=%d&_sSort=%s",
+                 game_gamebanana_id(), sort_alias[sort >= 0 && sort < GB_NSORTS ? sort : 0]);
+        if (cat > 0)
+            snprintf(url + strlen(url), sizeof url - strlen(url), "&_aFilters%%5BGeneric_Category%%5D=%d", cat);
     }
     Json *j = get_json(url, why, sizeof why);
     GbMod tmp[MAX_LIST];
@@ -144,6 +163,26 @@ static void do_list(void) {
     LOG("[gamebanana] list%s%s: %d mods%s%s\n", search[0] ? " for " : "", search, n, *why ? ": " : "", why);
 }
 
+static void do_categories(void) {
+    char why[200];
+    char url[200];
+    snprintf(url, sizeof url, API "/Mod/Categories?_idGameRow=%d&_sSort=a_to_z&_nPerpage=50", game_gamebanana_id());
+    Json *j = get_json(url, why, sizeof why);
+    pthread_mutex_lock(&g_lock);
+    g_ncats = 0;
+    for (size_t i = 0; j && i < json_len(j) && g_ncats < 32; i++) {
+        Json *r = json_at(j, i);
+        if (json_bool(json_get(r, "_bIsObsolete"), false) || !json_num(json_get(r, "_nItemCount"), 0)) continue;
+        GbCategory *k = &g_cats[g_ncats++];
+        k->id = (int)json_num(json_get(r, "_idRow"), 0);
+        k->count = (int)json_num(json_get(r, "_nItemCount"), 0);
+        copy_str(k->name, sizeof k->name, json_get(r, "_sName"));
+    }
+    if (!j) g_cats_asked = false;  // (try again at the next refresh)
+    pthread_mutex_unlock(&g_lock);
+    json_free(j);
+}
+
 static GbMod *cache_find(int id) {
     for (int i = 0; i < g_ncache; i++)
         if (g_cache[i].id == id) return &g_cache[i];
@@ -151,8 +190,7 @@ static GbMod *cache_find(int id) {
 }
 static bool fetch_details(int id, GbMod *m, char *why, size_t cap) {
     char url[300];
-    snprintf(url, sizeof url, API "/Mod/%d?_csvProperties=_sName,_aFiles,_nDownloadCount,_nLikeCount,_aSubmitter,"
-             "_sLicense,_aCategory,_aRootCategory,_sText,_sVersion", id);
+    snprintf(url, sizeof url, API "/Mod/%d/ProfilePage", id);
     Json *j = get_json(url, why, cap);
     if (!j) return false;
     memset(m, 0, sizeof *m);
@@ -166,7 +204,55 @@ static bool fetch_details(int id, GbMod *m, char *why, size_t cap) {
     copy_str(m->version, sizeof m->version, json_get(j, "_sVersion"));
     m->downloads = (int)json_num(json_get(j, "_nDownloadCount"), 0);
     m->likes = (int)json_num(json_get(j, "_nLikeCount"), 0);
-    html_text(json_str(json_get(j, "_sText"), ""), m->text, sizeof m->text);
+    m->views = (int)json_num(json_get(j, "_nViewCount"), 0);
+    m->thanks = (int)json_num(json_get(j, "_nThanksCount"), 0);
+    m->posts = (int)json_num(json_get(j, "_nPostCount"), 0);
+    m->subscribers = (int)json_num(json_get(j, "_nSubscriberCount"), 0);
+    m->added = (int64_t)json_num(json_get(j, "_tsDateAdded"), 0);
+    m->modified = (int64_t)json_num(json_get(j, "_tsDateModified"), 0);
+    m->obsolete = json_bool(json_get(j, "_bIsObsolete"), false);
+    m->ported = json_bool(json_get(j, "_bIsPorted"), false);
+    const char *raw = json_str(json_get(j, "_sText"), "");
+    const char *yt = strstr(raw, "youtube.com/embed/");  // (the description's video, if it has one)
+    if (!yt) yt = strstr(raw, "youtube-nocookie.com/embed/");
+    if (yt) {
+        yt = strstr(yt, "/embed/") + 7;
+        size_t n = strcspn(yt, "?\"'& ");
+        if (n && n < 40) snprintf(m->video, sizeof m->video, "https://youtu.be/%.*s", (int)n, yt);
+    }
+    html_text(raw, m->text, sizeof m->text);
+    Json *tags = json_get(j, "_aTags");
+    for (size_t i = 0, o = 0; i < json_len(tags) && o + 40 < sizeof m->tags; i++) {
+        Json *t = json_at(tags, i);
+        const char *s = json_str(json_get(t, "_sValue"), json_str(t, ""));
+        o += (size_t)snprintf(m->tags + o, sizeof m->tags - o, "%s%s", o ? ", " : "", s);
+    }
+    Json *cr = json_get(j, "_aCredits");  // "Developers: Name, Name" (a line per group, names only)
+    for (size_t g = 0, o = 0; g < json_len(cr) && o + 60 < sizeof m->credits; g++) {
+        Json *grp = json_at(cr, g), *au = json_get(grp, "_aAuthors");
+        o += (size_t)snprintf(m->credits + o, sizeof m->credits - o, "%s%s: ", o ? "\n" : "",
+                              json_str(json_get(grp, "_sGroupName"), "Credits"));
+        for (size_t i = 0; i < json_len(au) && o + 60 < sizeof m->credits; i++)
+            o += (size_t)snprintf(m->credits + o, sizeof m->credits - o, "%s%s", i ? ", " : "",
+                                  json_str(json_get(json_at(au, i), "_sName"), "?"));
+    }
+    Json *pm = json_get(json_get(j, "_aPreviewMedia"), "_aImages");
+    for (size_t i = 0; i < json_len(pm) && m->nshots < GB_MAX_SHOTS; i++) {
+        Json *im = json_at(pm, i);
+        const char *base = json_str(json_get(im, "_sBaseUrl"), ""), *f = json_str(json_get(im, "_sFile530"), "");
+        if (!*base || !*f) f = json_str(json_get(im, "_sFile"), "");
+        if (*base && *f) snprintf(m->shot[m->nshots++], sizeof m->shot[0], "%s/%s", base, f);
+    }
+    Json *lc = json_get(j, "_aLicenseChecklist");  // what the licence allows, asks about, forbids
+    static const struct { const char *key, *head; } kinds[] = {{"yes", "Allowed"}, {"ask", "Ask the author first"},
+                                                                  {"no", "Not allowed"}};
+    for (int k = 0, o = 0; k < 3; k++) {
+        Json *l = json_get(lc, kinds[k].key);
+        if (!json_len(l)) continue;
+        o += snprintf(m->rights + o, sizeof m->rights - (size_t)o, "%s%s: ", o ? "\n" : "", kinds[k].head);
+        for (size_t i = 0; i < json_len(l) && o + 60 < (int)sizeof m->rights; i++)
+            o += snprintf(m->rights + o, sizeof m->rights - (size_t)o, "%s%s", i ? "; " : "", json_str(json_at(l, i), ""));
+    }
     Json *files = json_get(j, "_aFiles");
     for (size_t i = 0; i < json_len(files) && m->nfiles < GB_MAX_FILES; i++) {
         Json *f = json_at(files, i);
@@ -175,6 +261,8 @@ static bool fetch_details(int id, GbMod *m, char *why, size_t cap) {
         copy_str(m->file_name[k], sizeof m->file_name[k], json_get(f, "_sFile"));
         copy_str(m->file_desc[k], sizeof m->file_desc[k], json_get(f, "_sDescription"));
         m->file_size[k] = (uint64_t)json_num(json_get(f, "_nFilesize"), 0);
+        m->file_downloads[k] = (int)json_num(json_get(f, "_nDownloadCount"), 0);
+        m->file_date[k] = (int64_t)json_num(json_get(f, "_tsDateAdded"), 0);
     }
     json_free(j);
     return true;
@@ -262,17 +350,43 @@ static void do_install(int id, int fi, bool enable) {
     else set_inst(GB_IDLE, 1, "Installed%s", enable ? " and on: it shows from the next start" : "");
 }
 
+static int img_next(void) {  // (g_lock held) a queued screenshot
+    for (int i = 0; i < g_nimg; i++)
+        if (g_img[i].st == 1) return i;
+    return -1;
+}
+static void do_image(int i) {
+    char url[128];
+    pthread_mutex_lock(&g_lock);
+    snprintf(url, sizeof url, "%s", g_img[i].url);
+    pthread_mutex_unlock(&g_lock);
+    HttpResponse r;
+    int st = http_request("GET", url, NULL, NULL, 0, 20000, &r);
+    int w = 0, h = 0, n;
+    uint8_t *px = st == 200 && r.body ? stbi_load_from_memory((const unsigned char *)r.body, (int)r.len, &w, &h, &n, 4) : NULL;
+    http_free(&r);
+    pthread_mutex_lock(&g_lock);
+    g_img[i].px = px, g_img[i].w = w, g_img[i].h = h, g_img[i].st = px ? 2 : 3;
+    pthread_mutex_unlock(&g_lock);
+    LOG("[gamebanana] screenshot %s: %s\n", url, px ? "ok" : "failed");
+}
+
 static void *worker(void *arg) {
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&g_lock);
-        while (!g_want_list && !g_nwant && !g_want_install) pthread_cond_wait(&g_wake, &g_lock);
+        while (!g_want_list && !g_nwant && !g_want_install && !g_want_cats && img_next() < 0) pthread_cond_wait(&g_wake, &g_lock);
         bool list = g_want_list, inst = g_want_install;
         int det = g_nwant ? g_want_details[--g_nwant] : 0;
         int iid = g_inst_req.id, ifi = g_inst_req.fi;
         bool ien = g_inst_req.enable;
+        int img = img_next();
+        bool cats = g_want_cats;
+        g_want_cats = false;
         g_want_list = false, g_want_install = false;
         pthread_mutex_unlock(&g_lock);
+        if (cats) do_categories();
+        if (img >= 0) do_image(img);
         if (inst) do_install(iid, ifi, ien);
         if (list) do_list();
         if (det) do_details(det);
@@ -293,6 +407,7 @@ void gb_refresh(const char *search) {
     pthread_mutex_lock(&g_lock);
     start();
     snprintf(g_search, sizeof g_search, "%s", search ? search : "");
+    if (!g_cats_asked) g_cats_asked = g_want_cats = true;
     g_want_list = true;
     g_list_st = GB_BUSY;
     snprintf(g_list_msg, sizeof g_list_msg, "Loading from GameBanana...");
@@ -353,3 +468,40 @@ GbState gb_install_state(int *id, float *progress, char *msg, int cap) {
     return s;
 }
 void gb_install_cancel(void) { g_cancel = 1; }
+
+const uint8_t *gb_image(int id, int idx, int *w, int *h) {
+    pthread_mutex_lock(&g_lock);
+    const uint8_t *px = NULL;
+    *w = 0;
+    int i = 0;
+    for (; i < g_nimg; i++)
+        if (g_img[i].id == id && g_img[i].idx == idx) break;
+    if (i < g_nimg) {
+        if (g_img[i].st == 2) px = g_img[i].px, *w = g_img[i].w, *h = g_img[i].h;
+        else if (g_img[i].st == 3) *w = -1;  // (failed)
+    } else {
+        GbMod *m = cache_find(id);
+        if (m && idx >= 0 && idx < m->nshots && g_nimg < MAX_IMG) {
+            g_img[g_nimg].id = id, g_img[g_nimg].idx = idx, g_img[g_nimg].st = 1;
+            snprintf(g_img[g_nimg].url, sizeof g_img[0].url, "%s", m->shot[idx]);
+            g_nimg++;
+            start();
+            pthread_cond_signal(&g_wake);
+        }
+    }
+    pthread_mutex_unlock(&g_lock);
+    return px;
+}
+
+void gb_set_filter(int sort, int category) {
+    pthread_mutex_lock(&g_lock);
+    g_sort = sort, g_cat = category;
+    pthread_mutex_unlock(&g_lock);
+}
+int gb_categories(GbCategory *out, int max) {
+    pthread_mutex_lock(&g_lock);
+    int n = g_ncats < max ? g_ncats : max;
+    memcpy(out, g_cats, sizeof *out * (size_t)n);
+    pthread_mutex_unlock(&g_lock);
+    return n;
+}

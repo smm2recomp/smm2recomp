@@ -7,6 +7,9 @@
 //   Online      the online backend, the game's own settings for it (game_rows) and the app's own rows.
 // Rows are the menu's option rows, so a controller, touch and the mouse all work it; B (Esc) leaves a mod's page.
 #include <SDL3/SDL.h>
+#ifdef __APPLE__
+#import <Metal/Metal.h>
+#endif
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,12 +114,60 @@ static int g_gb_file;
 static bool g_ask_remove;
 static char g_note[300];       // the last action's outcome (turned off another mod, installed...)
 static char g_search[96], g_gb_search[96];
+static int g_gb_sort, g_gb_cat;  // the GameBanana list's order, and its category (index in the choice: 0 all)
 static bool g_gb_loaded;
 
 static void fmt_size(uint64_t b, char *out, size_t cap) {
     if (b >= 1 << 30) snprintf(out, cap, "%.1f GB", b / 1073741824.0);
     else if (b >= 1 << 20) snprintf(out, cap, "%.0f MB", b / 1048576.0);
     else snprintf(out, cap, "%.0f KB", b / 1024.0);
+}
+// What the right-hand pane shows for a mod: its likes, downloads, submitter and developers first, then the rest
+static void gb_info(const GbMod &m, char *out, size_t cap) {
+    size_t o = (size_t)snprintf(out, cap, "%s\n\nSubmitter: %s\n\nLikes: %d     Downloads: %d\n", m.name, m.author, m.likes, m.downloads);
+    auto add = [&](const char *fmt, const char *a) {
+        if (o < cap && *a) o += (size_t)snprintf(out + o, cap - o, fmt, a);
+    };
+    add("\n%s\n", m.credits);
+    if (m.nshots && o < cap) o += (size_t)snprintf(out + o, cap - o, "\nScreenshots: %d\n", m.nshots);
+    add("\nCategory: %s\n", m.category);
+    add("Licence: %s\n", m.license);
+    add("\n%s", m.text);
+}
+#ifndef __APPLE__
+extern "C" uint64_t vk_imgui_texture_rgba(const void *rgba, int w, int h);  // runtime/nvn/vulkan/imgui_glue.cpp
+#endif
+// A mod's screenshot as a texture (made once its pixels have arrived), for the description pane of the row just drawn
+static void gb_show_image(int id, int idx) {
+    static struct { int id, idx, w, h; uint64_t tid; } tex[32];
+#ifdef __APPLE__
+    static id<MTLTexture> keep[32];  // (the textures live as long as the menu)
+#endif
+    static int ntex;
+    int w, h, i = 0;
+    for (; i < ntex; i++)
+        if (tex[i].id == id && tex[i].idx == idx) break;
+    if (i == ntex) {
+        const uint8_t *px = gb_image(id, idx, &w, &h);
+        if (!px || ntex >= 32) {
+            opt_desc_image(0, w < 0 ? -1 : 1, 1);  // (a place for it while it loads)
+            return;
+        }
+        tex[i].id = id, tex[i].idx = idx, tex[i].w = w, tex[i].h = h;
+#ifdef __APPLE__
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                     width:(NSUInteger)w height:(NSUInteger)h mipmapped:NO];
+        d.usage = MTLTextureUsageShaderRead;
+        keep[i] = [MTLCreateSystemDefaultDevice() newTextureWithDescriptor:d];
+        [keep[i] replaceRegion:MTLRegionMake2D(0, 0, (NSUInteger)w, (NSUInteger)h) mipmapLevel:0 withBytes:px
+                   bytesPerRow:(NSUInteger)w * 4];
+        tex[i].tid = (uint64_t)(uintptr_t)(__bridge void *)keep[i];
+#else
+        tex[i].tid = vk_imgui_texture_rgba(px, w, h);
+#endif
+        ntex++;
+    }
+    if (tex[i].tid) opt_desc_image(tex[i].tid, tex[i].w, tex[i].h);
 }
 static bool contains(const char *hay, const char *needle) {
     if (!*needle) return true;
@@ -289,13 +340,29 @@ static void page_gb_mod(int id) {
     opt_section(have ? m.name : "Loading...");
     if (opt_action("< Back to GameBanana", "", "Back to the list (B).", false)) { g_gb = 0; return; }
     if (!have) return;
-    char desc[1600], v[64];
-    snprintf(desc, sizeof desc, "%s\n\nBy %s on GameBanana: gamebanana.com/mods/%d%s%s", m.text, m.author, id,
-             m.license[0] ? ". Licence: " : "", m.license);
+    static char desc[9000];
+    char v[64];
+    gb_info(m, desc, sizeof desc);
+    static int shot;
+    static int shot_mod;
+    if (shot_mod != id) shot = 0, shot_mod = id;
+    if (m.nshots > 1) {
+        static const char *sn[GB_MAX_SHOTS] = {"1", "2", "3", "4", "5", "6"};
+        if (shot >= m.nshots) shot = 0;
+        opt_choice("Screenshot", &shot, sn, m.nshots, 0, desc);
+        gb_show_image(id, shot);
+    }
     opt_action("By", m.author, desc, false);
+    gb_show_image(id, shot);
     if (m.category[0]) opt_action("Category", m.category, desc, false);
     snprintf(v, sizeof v, "%d", m.downloads);
     opt_action("Downloads", v, desc, false);
+    gb_show_image(id, shot);
+    snprintf(v, sizeof v, "%d", m.likes);
+    opt_action("Likes", v, desc, false);
+    gb_show_image(id, shot);
+    gb_show_image(id, shot);
+    if (m.video[0] && opt_button("Watch the video", m.video)) SDL_OpenURL(m.video);
     if (m.license[0]) opt_action("Licence", m.license, "The author's licence. The mod is downloaded onto this device "
                                  "only; it is never part of " GAME_TITLE ".", false);
     opt_section("Install");
@@ -337,6 +404,25 @@ static void page_gb(void) {
     opt_section("GameBanana");
     if (opt_text("Search GameBanana", g_gb_search, sizeof g_gb_search, "name", "Searches GameBanana's mods for this game."))
         gb_refresh(g_gb_search);
+    {   // order and category (the browse list; a search is ordered by how well it matches)
+        GbCategory cats[32];
+        int nc = gb_categories(cats, 32);
+        static const char *cn[33];
+        static char cl[33][64];
+        snprintf(cl[0], sizeof cl[0], "All categories");
+        cn[0] = cl[0];
+        for (int i = 0; i < nc; i++) snprintf(cl[i + 1], sizeof cl[0], "%s (%d)", cats[i].name, cats[i].count), cn[i + 1] = cl[i + 1];
+        if (g_gb_cat > nc) g_gb_cat = 0;
+        int sort = g_gb_sort, cat = g_gb_cat;
+        const char *why = "Applies to browsing; a search lists what matches best first.";
+        opt_choice("Sort by", &sort, gb_sort_names, GB_NSORTS, 0, why);
+        opt_choice("Category", &cat, cn, nc + 1, 0, why);
+        if (sort != g_gb_sort || cat != g_gb_cat) {
+            g_gb_sort = sort, g_gb_cat = cat;
+            gb_set_filter(sort, cat > 0 ? cats[cat - 1].id : 0);
+            gb_refresh(g_gb_search);
+        }
+    }
     if (g_gb_search[0] && opt_button("Most downloaded", "Back to the most downloaded mods."))
         g_gb_search[0] = 0, gb_refresh(NULL);
     install_status_row();
@@ -349,18 +435,21 @@ static void page_gb(void) {
                    "this device only; each mod's author and licence are shown on its page.", false);
         if (st == GB_ERROR && opt_button("Try again", "")) gb_refresh(g_gb_search);
     }
-    opt_section(g_gb_search[0] ? "Results" : "Most downloaded");
+    opt_section(g_gb_search[0] ? "Results" : gb_sort_names[g_gb_sort]);
     for (int i = 0; i < n; i++) {
         bool on = false, inst = installed_gb(list[i].id, &on);
-        char label[260], desc[1500];
+        char label[260];
+        static char desc[9000];
         snprintf(label, sizeof label, "%s  -  %s", list[i].name, list[i].author);
         if (list[i].details)
-            snprintf(desc, sizeof desc, "%s. %d downloads.%s%s\n\n%s", list[i].category, list[i].downloads,
-                     list[i].license[0] ? " Licence: " : "", list[i].license, list[i].text);
-        else snprintf(desc, sizeof desc, "%s. By %s.", list[i].category, list[i].author);
+            gb_info(list[i], desc, sizeof desc);
+        else snprintf(desc, sizeof desc, "%s\n\nSubmitter: %s", list[i].name, list[i].author);  // (the details fill in below it)
         ImGui::PushID(list[i].id);
         if (opt_action(label, inst ? (on ? "On" : "Installed") : "", desc, false)) g_gb = list[i].id, g_gb_file = 0;
-        if (ImGui::IsItemFocused() && !list[i].details) gb_details(list[i].id);  // (the pane fills in)
+        if (ImGui::IsItemFocused() || ImGui::IsItemHovered()) {  // (the pane fills in)
+            if (!list[i].details) gb_details(list[i].id);
+            gb_show_image(list[i].id, 0);
+        }
         ImGui::PopID();
     }
 }
