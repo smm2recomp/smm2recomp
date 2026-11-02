@@ -45,6 +45,11 @@ static void mode_edges(void) {
     m = hy_mode(0, true, NULL);
     CHECK(m.world && m.login && !m.hybrid, "hy_mode(0, 1, NULL) = {%d,%d,%d}, want {1,1,0}", m.world, m.login,
           m.hybrid);
+    m = hy_mode(3, true, "");
+    CHECK(!m.world && !m.login && !m.hybrid && m.endless, "hy_mode(3, 1, \"\") = {%d,%d,%d,%d}, want {0,0,0,1}", m.world,
+          m.login, m.hybrid, m.endless);
+    m = hy_mode(3, false, "");
+    CHECK(!m.endless, "hy_mode(3, 0, \"\").endless = %d, want 0", m.endless);
     m = hy_mode(1, true, "MOD");
     CHECK(!m.world && !m.login && !m.hybrid, "hy_mode(1, 1, \"MOD\") = {%d,%d,%d}, want {0,0,0}", m.world, m.login,
           m.hybrid);

@@ -129,6 +129,7 @@ void game_modules_loaded(void) {
 }
 
 bool ocw_active(void) { return g_ocw.active; }
+const char *ocw_domain(void) { return g_ocw.domain; }
 
 // ---- Play History (My Info and a maker's page): the game's own GetUsers record comes from OCW's NEX side with no play
 // statistics, so they are filled in from OCW's REST API, which lists every course a maker played with their own

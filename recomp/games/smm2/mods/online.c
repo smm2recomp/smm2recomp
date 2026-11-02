@@ -128,6 +128,18 @@ static void answered(Cpu *c, const char *what) {
 
 static void get_application_config(Cpu *c) {
     uint64_t no = c->x[0];
+    if (mod_local_runs()) {  // (ocw: the backend's config, with the Endless Challenge's four switched on: the mod runs it)
+        guest_call_orig(c, MAIN_ADDR(0x14ce2f0));
+        if (g32(no + 0x60) == 0 && (uint8_t)c->x[0] == wrapper_ok()) {
+            uint64_t ret = c->x[0];
+            netobj_lock(c);
+            for (int d = 0; d < 4; d++) s32(no + APP_CONFIG + 4 * d, 1);
+            netobj_unlock(c);
+            c->x[0] = ret;
+            LOG("[mod] GetApplicationConfig: the backend's, Endless on\n");
+        }
+        return;
+    }
     if (mod_hybrid()) {
         guest_call_orig(c, MAIN_ADDR(0x14ce2f0));
         if (g32(no + 0x60) == 0 && (uint8_t)c->x[0] == wrapper_ok()) {  // (the game's own request succeeded)

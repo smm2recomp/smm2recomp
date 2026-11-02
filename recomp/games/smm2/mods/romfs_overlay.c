@@ -512,7 +512,7 @@ const char *game_romfs_overlay(void) {
 static void overlay_list(void) {
     extern bool costumes_on(void), lanky_on(void);
     size_t l = usermods_overlay(g_overlay, sizeof g_overlay);
-    if (!mod_hundred() && !costumes_on() && !lanky_on()) return;
+    if (!mod_endless() && !costumes_on() && !lanky_on()) return;
     generate_all();
     if (gen_dir[0] && !generating) snprintf(g_overlay + l, sizeof g_overlay - l, "%s\n", gen_dir);
 }

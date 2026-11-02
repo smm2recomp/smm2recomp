@@ -33,6 +33,8 @@ extern ModSettings g_mod;
 void mod_settings_load(void);   // once (idempotent)
 void mod_server_ready(void);    // before the first request: with courses=tgrcode, start the built-in server (once)
 bool mod_hundred(void);         // the mod answers Course World (the 100 Mario mod is on; hybrid too)
+bool mod_endless(void);         // the mod answers the Endless Challenge / 100 Mario runs (Course World, or ocw: those alone)
+bool mod_local_runs(void);      // ... and the runs are kept in the game (backend ocw: mods/ocw_runs.c), not on a server
 bool mod_hybrid(void);          // ... while the game's own NEX client is logged in to the backend (hybrid.h)
 bool mod_answers_login(void);   // the mod answers the login too (backend ours: no NEX connection)
 bool mod_hundred_offered(void); // ... and 100 Mario is offered (ruleset "hundred": the Endless button opens it)

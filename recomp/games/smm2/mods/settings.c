@@ -89,6 +89,9 @@ void mod_settings_load(void) {
     if (m.hybrid)
         LOG("[mod] hybrid: the game logs in to the %s backend (Network Play); Course World, the Endless Challenge and "
             "100 Mario from the mod\n", net_backend_key(net_backend()));
+    if (m.endless)
+        LOG("[mod] 100 Mario Challenge on (OCW): runs kept in the game, courses from OCW's course list, ruleset %s\n",
+            g_mod.ruleset);
     if (m.world && !strcmp(g_mod.courses, "tgrcode"))
         LOG("[mod] 100 Mario Challenge on: courses from TGRCode (built-in server), ruleset %s\n", g_mod.ruleset);
     else if (m.world)
@@ -130,12 +133,14 @@ void mod_server_ready(void) {
 // course_world=backend; with local-nex only course_world=mod makes it hybrid.
 static HyMode mode(void) { mod_settings_load(); return hy_mode(net_backend(), g_mod.hundred, g_mod.course_world); }
 bool mod_hundred(void) { return mode().world; }
+bool mod_endless(void) { HyMode m = mode(); return m.world || m.endless; }
+bool mod_local_runs(void) { return mode().endless; }
 bool mod_hybrid(void) { return mode().hybrid; }
 bool mod_answers_login(void) { return mode().login; }
 // Challenge Modes: with 100 Mario offered (ruleset=hundred) Course World's Endless Challenge button (relabelled,
 // relabel.c) opens the mode used last: SMM1's 100 Mario Challenge or SMM2's own Endless Challenge; ZL / ZR switch
 // (bridge.c). SMM1's rules apply only in the 100 Mario part; the session flag says the player is in SMM2's.
-bool mod_hundred_offered(void) { return mod_hundred() && !strcmp(g_mod.ruleset, "hundred"); }
+bool mod_hundred_offered(void) { return mod_endless() && !strcmp(g_mod.ruleset, "hundred"); }
 bool mod_hundred_rules(void) { return mod_hundred_offered() && !mod_smm2_session(); }
 bool mod_smm2_session(void) { mod_settings_load(); return smm2_session; }
 void mod_set_smm2_session(bool on) {

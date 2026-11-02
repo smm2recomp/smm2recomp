@@ -7,6 +7,7 @@ typedef struct Cpu Cpu;
 // backend=ocw was chosen and ocw-config.json was read: the domain is written into the game and the handshake carries
 // the token. False: nothing of this mod does anything.
 bool ocw_active(void);
+const char *ocw_domain(void);  // the OCW host from ocw-config.json ("" if none)
 
 // After the game's own GetUsers wrapper ran (online.c, world.c): fill the first user record's Play History (courses
 // played / cleared, attempts, lives lost) from OCW's REST API. Does nothing with OCW off or a failed request.

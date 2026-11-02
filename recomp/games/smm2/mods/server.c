@@ -48,6 +48,12 @@ void srv_waited(bool on) {
 static int request_typed(const char *method, const char *path, const char *body, size_t blen, const char *type,
                          HttpResponse *r) {
     char url[512], hdr[256];
+    if (mod_local_runs()) {  // (backend ocw: the runs are kept in the game, ocw_runs.c)
+        extern int ocw_runs_request(const char *method, const char *path, const char *body, size_t blen, HttpResponse *r);
+        int st = ocw_runs_request(method, path, body, blen, r);
+        if (!quiet) MLOG("%s %s -> %d (%zu bytes)\n", method, path, st, r->len);
+        return st;
+    }
     mod_server_ready();  // (courses=tgrcode: the built-in server starts before the first request)
     snprintf(url, sizeof url, "%s%s", g_mod.server, path);
     hdr[0] = 0;

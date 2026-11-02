@@ -236,7 +236,7 @@ void mod_account_info(char *name, size_t cap, uint32_t best[4]) {
 
 // The menu's Expert / Super Expert tabs: a locked one doesn't open (the selection stays where it is).
 static void tab_handler(Cpu *c, int d, uint64_t addr) {
-    if (!mod_hundred() || difficulty_open(d)) { guest_call_orig(c, addr); return; }
+    if (!mod_endless() || difficulty_open(d)) { guest_call_orig(c, addr); return; }
     static const char *const names[4] = {"Easy", "Normal", "Expert", "Super Expert"};
     LOG("[mod] %s is locked: complete a %s run first\n", names[d], names[d - 1]);
 }
@@ -278,13 +278,17 @@ static void set_play(Cpu *c, uint64_t no, uint32_t d, uint32_t lives, uint32_t c
 static uint32_t lives_now(uint64_t no, uint32_t d) { return g8(record(no, d) + 0x30); }
 static uint32_t clears_now(uint64_t no, uint32_t d) { return g32(record(no, d) + 0x2c); }
 
-#define WRAPPER(name, off)                                                                       \
+// The mod answers the Endless Challenge's runs (mod_endless()); a Course World request only where it answers Course
+// World (mod_hundred(): not with backend ocw, whose own answer to those is the game's).
+#define WRAPPER_GATED(name, off, gate)                                                           \
     static void name##_impl(Cpu *c, uint64_t no);                                                \
     static void name(Cpu *c) {                                                                   \
-        if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                      \
+        if (!gate()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                             \
         name##_impl(c, c->x[0]);                                                                 \
     }                                                                                            \
     static void name##_impl(Cpu *c, uint64_t no)
+#define WRAPPER(name, off) WRAPPER_GATED(name, off, mod_endless)
+#define WRAPPER_WORLD(name, off) WRAPPER_GATED(name, off, mod_hundred)
 
 // ---- GetEndlessModeStatus: the four run records
 
@@ -639,6 +643,7 @@ void mod_fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficulty)
 
 WRAPPER(search_courses, 0x14d8550) {
     if (g32(no + NO_SEARCH_TYPE) != 0xE) {  // Course World's lists (world.c)
+        if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(0x14d8550)); return; }  // (ocw: the backend's own)
         extern void world_search(Cpu * c, uint64_t no, uint32_t type);
         world_search(c, no, g32(no + NO_SEARCH_TYPE));
         return;
@@ -674,14 +679,14 @@ WRAPPER(search_courses, 0x14d8550) {
 // clear), a list for a course (ring at +0xe85a0, 0x18-byte entries), and a check on an id (+0x141480 -> u32 result
 // at +0x141604, 0 = fine). Answered empty: no records, an empty list, the check passes. Not connected, the game
 // shows a communication error at times (it doesn't need them to play).
-WRAPPER(course_list_info, 0x14ec0d0) {
+WRAPPER_WORLD(course_list_info, 0x14ec0d0) {
     netobj_lock(c);
     s64(no + 0xe85ac, 0);  // head 0, count 0
     netobj_unlock(c);
     finish(c, no, true, 0);
 }
 
-WRAPPER(id_check, 0x14f17a0) {
+WRAPPER_WORLD(id_check, 0x14f17a0) {
     netobj_lock(c);
     s32(no + 0x141604, 0);
     netobj_unlock(c);
@@ -690,7 +695,7 @@ WRAPPER(id_check, 0x14f17a0) {
 
 // The course's comments (SearchCommentsInOrder, read while a course plays): none. Ring of 0x390-byte comments at
 // +0x8f410; +0xe8528 / +0xe852c / +0xe852d: the request it answered and "answered".
-WRAPPER(course_comments, 0x14e8ec0) {
+WRAPPER_WORLD(course_comments, 0x14e8ec0) {
     netobj_lock(c);
     s64(no + 0x8f41c, 0);  // head 0, count 0
     s32(no + 0xe8528, g32(no + 0x737a8));
@@ -706,7 +711,7 @@ WRAPPER(course_comments, 0x14e8ec0) {
 // +0x74760); the answer goes to the course list ring at +0x30780, as for a search. From GET /api/courses/<code>.
 // (A Super World has up to 40 courses.)
 #define GET_COURSES_MAX 64
-WRAPPER(get_courses, 0x14dbae0) {
+WRAPPER_WORLD(get_courses, 0x14dbae0) {
     uint64_t ids[GET_COURSES_MAX];
     uint32_t n = 0;
     netobj_lock(c);
@@ -808,6 +813,7 @@ static void *prefetch_data_thread(void *arg) {
 }
 
 static void prefetch_data(uint32_t d) {
+    if (mod_local_runs()) return;  // (ocw: the game downloads the course file itself)
     pthread_t th;
     pthread_create(&th, NULL, prefetch_data_thread, (void *)(intptr_t)d);
     pthread_detach(th);
@@ -834,7 +840,7 @@ static uint32_t crc32(const uint8_t *p, size_t n) {
     return c ^ 0xFFFFFFFFu;
 }
 
-WRAPPER(get_course_file, 0x14de010) {
+WRAPPER_WORLD(get_course_file, 0x14de010) {
     uint64_t id = g64(no + NO_DL_ID), dest = g64(no + NO_DL_BUFFER);
     char code[12], path[96];
     code_of(id, code);
