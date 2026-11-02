@@ -335,6 +335,12 @@ void usermods_identity(char *buf, size_t cap) {
     identity_locked(buf, cap);
     pthread_mutex_unlock(&g_lock);
 }
+static char g_layer[128];
+void usermods_set_layer(const char *dir) {
+    pthread_mutex_lock(&g_lock);
+    snprintf(g_layer, sizeof g_layer, "%s", dir ? dir : "");
+    pthread_mutex_unlock(&g_lock);
+}
 size_t usermods_overlay(char *buf, size_t cap) {
     pthread_mutex_lock(&g_lock);
     ensure_scanned();
@@ -347,9 +353,43 @@ size_t usermods_overlay(char *buf, size_t cap) {
         l += (size_t)w;
         LOG("[usermods] on: %s (%s, %d files)\n", g_e[i].m.name, g_e[i].m.id, g_e[i].m.nfiles);
     }
+    if (l && g_layer[0]) {
+        int w = snprintf(buf + l, cap - l, "%s\n", g_layer);
+        if (w > 0 && (size_t)w < cap - l) l += (size_t)w;
+    }
     if (!g_started_set) identity_locked(g_started, sizeof g_started), g_started_set = true;
     pthread_mutex_unlock(&g_lock);
     return l;
+}
+void usermods_each_file(const char *const *suffixes, void (*cb)(const char *id, const char *rel, void *ud), void *ud) {
+    char **ids = NULL, **rels = NULL;
+    int n = 0, cap = 0;
+    pthread_mutex_lock(&g_lock);
+    ensure_scanned();
+    for (int i = 0; i < g_n; i++) {
+        if (!g_e[i].m.enabled || !g_e[i].m.has_romfs) continue;
+        read_files(&g_e[i]);
+        for (int k = 0; k < g_e[i].nf; k++) {
+            size_t l = strlen(g_e[i].files[k]);
+            bool match = false;
+            for (int s = 0; suffixes[s] && !match; s++) {
+                size_t sl = strlen(suffixes[s]);
+                match = l >= sl && !strcasecmp(g_e[i].files[k] + l - sl, suffixes[s]);
+            }
+            if (!match) continue;
+            if (n == cap) {
+                cap = cap ? cap * 2 : 16;
+                ids = realloc(ids, sizeof *ids * (size_t)cap), rels = realloc(rels, sizeof *rels * (size_t)cap);
+            }
+            ids[n] = strdup(g_e[i].m.id), rels[n] = strdup(g_e[i].files[k]), n++;
+        }
+    }
+    pthread_mutex_unlock(&g_lock);
+    for (int i = 0; i < n; i++) {
+        cb(ids[i], rels[i], ud);
+        free(ids[i]), free(rels[i]);
+    }
+    free(ids), free(rels);
 }
 bool usermods_changed_since_start(void) {
     char now[sizeof g_started];

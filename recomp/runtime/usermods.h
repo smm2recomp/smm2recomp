@@ -41,8 +41,13 @@ void usermods_note_crash(void);  // (the crash path: notes which mods were on)
 // The game's side (at its RomFS's opening): the enabled mods' romfs folders, lowest priority first, one per line
 // (each ending in '\n'); the length written.
 size_t usermods_overlay(char *buf, size_t cap);
+// A folder the game's side adds after the mods' own (the mods' archives merged with the game's); NULL / "" for none.
+void usermods_set_layer(const char *dir);
 bool usermods_find(const char *rel, char *out, size_t cap);  // an enabled mod's file (the winning one)
 void usermods_identity(char *buf, size_t cap);              // what's enabled, for caches built from the mods' files
+// The enabled mods' romfs files ending in one of the suffixes (NULL-terminated, case-insensitive), lowest priority first:
+// cb(mod id, path under romfs/). A snapshot: cb may call back into this file.
+void usermods_each_file(const char *const *suffixes, void (*cb)(const char *id, const char *rel, void *ud), void *ud);
 
 // Install a mod from a folder (an unpacked download): its game files are found wherever they are in it (a romfs
 // folder, Atmosphère's contents/<title>/romfs, or the game's own top folders), moved to mods/<id>/romfs, and info

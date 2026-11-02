@@ -96,14 +96,24 @@ done:
     return ok;
 }
 
-static bool romfs_read(const char *path, Buf *out) {
+// the game's own file, without any mod
+static bool base_read(const char *path, Buf *out) {
     char p[1200];
-    // the player's mods first (runtime/usermods.h): a generator edits the file the game would otherwise get
-    if (usermods_find(path, p, sizeof p) && read_host(p, out)) return true;
     snprintf(p, sizeof p, "%s/%s", g_romfs_dir ? g_romfs_dir : "", path);
     if (read_host(p, out)) return true;
     snprintf(p, sizeof p, "%s.bin", g_romfs_dir ? g_romfs_dir : "");
     return romfs_bin_read(p, path, out);
+}
+
+#define UM_DIR "mods-generated/romfs-usermods"  // the player's archives laid over the game's (merge_user_archives)
+
+static bool romfs_read(const char *path, Buf *out) {
+    char p[1200];
+    // the player's mods first (runtime/usermods.h): a generator edits the file the game would otherwise get
+    snprintf(p, sizeof p, UM_DIR "/%s", path);
+    if (read_host(p, out)) return true;
+    if (usermods_find(path, p, sizeof p) && read_host(p, out)) return true;
+    return base_read(path, out);
 }
 
 // ---- Yaz0 (decoded by lyt_yaz0; written as literals: every 8 bytes behind a 0xff flag byte)
@@ -500,13 +510,93 @@ static void generate_all(void) {
     else remove(ROV_ROOT "/romfs.id");
 }
 
+// ---- the player's archives: a mod's .pack / .sarc / .szs that the game has too is laid over the game's file member by
+// member, not instead of it. A mod made for an older game version carries only that version's members; replacing the
+// whole archive would take away what the updates added (the game then asks for a member that is no longer there).
+// A member the mod has replaces the game's (at the game's alignment); one only the mod has is added. The result goes to
+// UM_DIR (above the mods' folders in the overlay), made again when the set of mods changes.
+static const char *const k_archive_ext[] = {".pack", ".sarc", ".szs", NULL};
+
+static void merge_one(const char *id, const char *rel, void *ud) {
+    (void)ud;
+    char out_path[1200], mod_path[1200];
+    snprintf(out_path, sizeof out_path, UM_DIR ".new/%s", rel);
+    snprintf(mod_path, sizeof mod_path, USERMODS_DIR "/%s/romfs/%s", id, rel);
+    Buf cur = {0}, mod = {0};
+    RovSarc *a = NULL, *b = NULL;
+    int game_n = 0, replaced = 0, added = 0;
+    bool earlier = read_host(out_path, &cur);  // (an earlier mod's merge of it)
+    if (!earlier && !base_read(rel, &cur)) return;  // (the game has no such file: the mod's joins as it is)
+    if (!read_host(mod_path, &mod)) goto done;
+    a = rov_sarc_parse(&cur), b = rov_sarc_parse(&mod);
+    if (!a || !b) {
+        if (earlier) write_path(out_path, mod.d, mod.n);  // (not an archive: this mod's file wins over the earlier merge)
+        goto done;
+    }
+    game_n = a->s.n;
+    for (int i = 0; i < b->s.n; i++) {
+        SEntry *m = &b->s.e[i], *g = sarc_find(&a->s, m->name);
+        if (g) {
+            if (g->data.n == m->data.n && !memcmp(g->data.d, m->data.d, m->data.n)) continue;
+            free(g->data.d);
+            g->data = m->data;
+            replaced++;
+        } else {
+            a->s.e = realloc(a->s.e, sizeof *a->s.e * ((size_t)a->s.n + 1));
+            a->s.e[a->s.n++] = *m;
+            added++;
+        }
+        m->data = (Buf){0};
+    }
+    if (replaced || added) {
+        Buf w = rov_sarc_build(a);
+        bool ok = write_path(out_path, w.d, w.n);
+        free(w.d);
+        LOG("[usermods] %s: %s joins the game's (%d members there, %d in the mod: %d replaced, %d added)%s\n", id, rel,
+            game_n, b->s.n, replaced, added, ok ? "" : " - FAILED to write it");
+    }
+done:
+    if (a) rov_sarc_store(a, NULL);
+    if (b) rov_sarc_store(b, NULL);
+    free(cur.d), free(mod.d);
+}
+
+// Lays the enabled mods' archives over the game's into UM_DIR (when the set of mods changed). True: UM_DIR is there.
+static bool merge_user_archives(void) {
+    char um[2048], id[2200];
+    usermods_identity(um, sizeof um);
+    if (!*um) {
+        plat_remove_tree(UM_DIR);
+        remove(UM_DIR ".id");
+        return false;
+    }
+    snprintf(id, sizeof id, "merge:1\n%s", um);
+    struct stat st;
+    if (!stat(UM_DIR, &st) && same_identity(UM_DIR ".id", id)) return true;  // (merged before, for the same mods)
+    plat_remove_tree(UM_DIR ".new");
+    mkdirs(UM_DIR ".new");
+    usermods_each_file(k_archive_ext, merge_one, NULL);
+    plat_remove_tree(UM_DIR);
+    if (rename(UM_DIR ".new", UM_DIR)) {
+        LOG("[usermods] could not move the merged archives into place (%s)\n", strerror(errno));
+        return false;
+    }
+    write_path(UM_DIR ".id", id, strlen(id));
+    return true;
+}
+
 // The game's RomFS overlay (runtime/game_hooks.c, runtime/mods.c, runtime/services/fs.c): the player's enabled mods'
-// folders (runtime/usermods.h), then the generated files on top (made from the mods' versions), one per line.
+// folders (runtime/usermods.h), their archives merged with the game's, then the generated files on top (made from the
+// mods' versions), one per line.
 static void overlay_list(void);
 static char g_overlay[16384];
+static void overlay_init(void) {
+    usermods_set_layer(merge_user_archives() ? UM_DIR : NULL);  // (the merged archives go right after the mods' folders)
+    overlay_list();
+}
 const char *game_romfs_overlay(void) {
     static pthread_once_t once = PTHREAD_ONCE_INIT;
-    pthread_once(&once, overlay_list);
+    pthread_once(&once, overlay_init);
     return g_overlay[0] ? g_overlay : NULL;
 }
 static void overlay_list(void) {
