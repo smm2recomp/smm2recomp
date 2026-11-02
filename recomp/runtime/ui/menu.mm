@@ -623,9 +623,6 @@ static void tab_display(void) {
     float scale = ImGui::GetFontSize() / 34;
     opt_begin("##video", scale);
     opt_section("Display");
-    opt_choice("Theme", &g_settings.theme, g_theme_names, N_THEMES, THEME_DEFAULT,
-               "The colours of this menu. Default: forest green and gold. NES: the 8-bit look of NES.css - dark panels, thick white borders, square edges and stepped corners.\n\n"
-               "Styled after https://nostalgic-css.github.io/NES.css/");
     const char *aspects[] = {"Unlocked", "Original 16:9"};
     opt_choice("Aspect ratio", &g_settings.aspect, aspects, 2, ASPECT_UNLOCKED,
                "Unlocked: the view fills the window, so wider (or taller) windows show more of the island - up to "
@@ -699,17 +696,6 @@ static void tab_display(void) {
                "where it was half a frame earlier - no artifacts from guessing, but more work for the GPU. Does "
                "nothing on a 60 Hz display.");
 
-    opt_section("Game");
-    if (opt_toggle("Skip intro", &g_settings.skip_intro, false,
-                   "Skips the opening logos and goes straight to the title screen when the game starts.")) {
-        settings_save();
-    }
-#ifdef GAME_LA_SETTINGS  // (Link's Awakening's, from the runtime this one shares: nothing in other games)
-    opt_toggle("Remove blur", &g_settings.blur_removal, false,
-               "Turns off the tilt-shift blur at the top and bottom of the screen.");
-    opt_toggle("Hide Hero Mode icon", &g_settings.hide_hero_icon, false,
-               "Hides the Hero Mode emblem in the corner of the screen while playing a Hero Mode file.");
-#endif
     {   // the shader compile-ahead (GitHub #37): how far it is, and the switch to let it run at full speed
         opt_section("Shaders");
         AheadStatus a = shader_ahead_status();
@@ -725,6 +711,32 @@ static void tab_display(void) {
                    "Prepares the shaders with every CPU core and without pausing for the game. It finishes much sooner "
                    "but can make the game stutter meanwhile: turn it on, wait at the title screen until Shader "
                    "preparation says Prepared, then turn it off if you like. From the next start.");
+    }
+    opt_end();
+}
+
+static void tab_general(void) {
+    opt_begin("##general", ImGui::GetFontSize() / 34);
+    opt_section("Menu");
+    opt_choice("Theme", &g_settings.theme, g_theme_names, N_THEMES, THEME_DEFAULT,
+               "The colours of this menu. Default: forest green and gold. NES: the 8-bit look of NES.css - dark panels, thick white borders, square edges and stepped corners.\n\n"
+               "Styled after https://nostalgic-css.github.io/NES.css/");
+    static const char *sizes[] = {"Compact", "Small", "Normal", "Large", "Extra large"};
+    static const float size_scale[] = {0.6f, 0.8f, 1.0f, 1.25f, 1.5f};
+    enum { NSIZES = sizeof size_scale / sizeof size_scale[0], SIZE_NORMAL = 2 };
+    int si = SIZE_NORMAL;
+    for (int i = 0; i < NSIZES; i++)  // (the nearest preset, for a hand-edited value in the ini)
+        if (fabsf(size_scale[i] - g_settings.menu_scale) < fabsf(size_scale[si] - g_settings.menu_scale)) si = i;
+    if (opt_choice("Menu size", &si, sizes, NSIZES, SIZE_NORMAL,
+                   "How big this menu is. Normal adapts to the window (smaller on small windows, growing more slowly "
+                   "on big or high-resolution ones); Compact and Small fit more on the screen, Large and Extra large "
+                   "are easier to read from a distance. Applies at once."))
+        g_settings.menu_scale = size_scale[si];
+
+    opt_section("Game");
+    if (opt_toggle("Skip intro", &g_settings.skip_intro, false,
+                   "Skips the opening logos and goes straight to the title screen when the game starts.")) {
+        settings_save();
     }
     opt_end();
 }
@@ -965,8 +977,8 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     if (prelaunch) tabs[ntabs++] = {"Prelaunch", -1, true};
     // (LAS Recomp's game tabs - Save Editor, Randomizer, Warp, Cheats, Gameplay, Cosmetics - are not part of the
     // shared runtime; their ids stay unused so the test hooks keep their numbers)
-    static const char *names[] = {"Video", "Audio", "Mods", "Online", "", "", "", "", "Controls", "Quit"};
-    static const int order[] = {8, 0, 1, 2, 3, 9};  // Controls, Video, Audio, Mods, Online, Quit
+    static const char *names[] = {"Video", "Audio", "Mods", "Online", "", "General", "", "", "Controls", "Quit"};
+    static const int order[] = {5, 8, 0, 1, 2, 3, 9};  // General, Controls, Video, Audio, Mods, Online, Quit
     const GameModToggle *mods;
     const GameModTrigger *triggers;
     const GameModRow *mrows;
@@ -1019,7 +1031,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 ImGui::PushStyleColor(ImGuiCol_Tab, theme_palette().tab_alt);
                 ImGui::PushStyleColor(ImGuiCol_TabHovered, theme_palette().tab_alt);
             }
-            if (g_focus_tab == -1 && !prelaunch) g_focus_tab = 8;  // (no Prelaunch in game: Controls, the first tab)
+            if (g_focus_tab == -1 && !prelaunch) g_focus_tab = 5;  // (no Prelaunch in game: General, the first tab)
             bool focus_here = g_focus_tab == t.id || (g_focus_tab == -100 && t.id == g_tab);
             bool open = ImGui::BeginTabItem(lbl, NULL, f);
             ImGui::PopStyleColor(lit ? 3 : 1);
@@ -1064,6 +1076,7 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
                 case 1: tab_audio(); break;
                 case 2: tab_mods(); break;
                 case 3: tab_online(); break;
+                case 5: tab_general(); break;
                 case 8: tab_about(); break;
                 case 9: tab_quit(scale, in_game); break;
                 }
@@ -1204,8 +1217,12 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     last = now;
     drain_events(io);
     // fonts are built at 34/56 px for a ~1080 px tall output; scale to the window
-    float scale = (float)(th / 1080.0);
-    if (scale < 0.45f) scale = 0.45f;
+    // reactive: grows slower than the window (0.8 at 1080 p, ~1.35 at 4K rather than 2), and never wider than the
+    // window can hold (narrow windows shrink the menu instead of cutting it off); Menu size scales the result
+    float scale = 0.8f * powf((float)(th / 1080.0), 0.75f);
+    if (scale > (float)(tw / 1100.0)) scale = (float)(tw / 1100.0);
+    scale *= g_settings.menu_scale;
+    if (scale < 0.3f) scale = 0.3f;
     io.FontGlobalScale = scale / g_atlas_scale;
 
 #ifdef __APPLE__
@@ -1283,7 +1300,8 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (open) {
         // dim the game behind the menu
         ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 110));
-        float w = fminf(io.DisplaySize.x * 0.9f, 1500 * scale), h = io.DisplaySize.y - 2 * 18 * scale;  // (all the height: a slim margin)
+        float h = io.DisplaySize.y - 2 * 18 * scale;  // (all the height: a slim margin)
+        float w = fminf(io.DisplaySize.x * 0.96f, h * 2.2f);  // (the window's width, not the text size's: a smaller menu fits more across)
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
         if (g_touch_ui) ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, 34 * scale);  // (a thumb's width)

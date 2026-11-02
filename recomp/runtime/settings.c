@@ -24,6 +24,7 @@ Settings g_settings = {
     .movie_audio = true,
     .skip_intro = false,
     .show_fps = false,
+    .menu_scale = 1.0f,
     .show_memory = false,
     .inv_keys = true,
     .tracker = true,
@@ -101,6 +102,7 @@ void settings_load(void) {
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
         else if (!strcmp(key, "skip_intro")) g_settings.skip_intro = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
+        else if (!strcmp(key, "menu_scale")) g_settings.menu_scale = (float)atof(val);
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
         else if (!strcmp(key, "ahead_fast")) g_settings.ahead_fast = atoi(val) != 0;
         else if (!strcmp(key, "theme")) {  // (a name from g_theme_names; anything else: the default)
@@ -154,6 +156,8 @@ void settings_load(void) {
     if (!aspect_key) g_settings.aspect_asked = true;  // (likewise: the aspect ratio was chosen already)
     if (g_settings.volume < 0) g_settings.volume = 0;
     if (g_settings.volume > 2) g_settings.volume = 2;
+    if (!(g_settings.menu_scale >= 0.5f)) g_settings.menu_scale = 0.5f;
+    if (g_settings.menu_scale > 1.5f) g_settings.menu_scale = 1.5f;
     const char *si = getenv("RECOMP_SKIP_INTRO");
     if (si) g_settings.skip_intro = atoi(si) != 0;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
@@ -170,6 +174,7 @@ void settings_save(void) {
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "skip_intro = %d\n", g_settings.skip_intro);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
+    fprintf(f, "menu_scale = %.2f\n", g_settings.menu_scale);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
     fprintf(f, "ahead_fast = %d\n", g_settings.ahead_fast);
     fprintf(f, "theme = %s\n", g_theme_names[g_settings.theme >= 0 && g_settings.theme < N_THEMES ? g_settings.theme : THEME_DEFAULT]);
