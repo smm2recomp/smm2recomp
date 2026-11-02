@@ -41,6 +41,10 @@
 
 #define QUEUE_AHEAD 12      // courses held ahead of the run's position
 #define HISTORY_MAX 48
+#define SEEN_MAX 400        // recently played courses remembered across runs
+#define FRESH_WANTED 6      // unplayed courses of the run's own tier to queue before settling for others
+#define FETCHES_PER_REFILL 2
+#define POOL_MAX 1500
 #define PAGE 100            // OCW's list page size
 #define PAGES_PER_FILL 3    // pages fetched when a run needs courses
 #define MIN_RATED 20        // attempts before a course has a fail rate
@@ -162,7 +166,7 @@ static void pool_add(const Course *c) {
 
 // Fetch some pages of OCW's newest courses at random offsets into the pool (pool_lock held).
 static void pool_fill(void) {
-    static unsigned span = 10;  // pages to pick from; shrinks when a page comes back short
+    static unsigned span = 30;  // pages to pick from; shrinks when a page comes back short
     const char *domain = ocw_domain();
     if (!*domain) {
         LOG("[mod] OCW 100 Mario: no domain (ocw-config.json): no courses\n");
@@ -200,40 +204,67 @@ static bool in_run(const Run *r, const char *code) {
     return false;
 }
 
-// Top the run's queue up from the pool (lock held; may fetch). 100 Mario: pick_hundred's tiers (SMM1's fail-rate band,
-// any rated course, unrated ones). SMM2: pick's (the difficulty's band, the bands one, two, three steps away, then
-// unrated ones).
+// Courses this player has played lately (any run, both modes), oldest first in a ring; refill prefers the others.
+static char seen[SEEN_MAX][12];
+static int nseen, seen_head;
+
+static bool seen_has(const char *code) {
+    for (int i = 0; i < nseen; i++)
+        if (!strcmp(seen[i], code)) return true;
+    return false;
+}
+
+static void seen_add(const char *code) {
+    if (seen_has(code)) return;
+    snprintf(seen[seen_head], sizeof seen[0], "%s", code);
+    seen_head = (seen_head + 1) % SEEN_MAX;
+    if (nseen < SEEN_MAX) nseen++;
+}
+
+// Does the pool course belong to the tier for this run? 100 Mario: pick_hundred's tiers (SMM1's fail-rate band, any
+// rated course, unrated ones). SMM2: pick's (the difficulty's band, the bands one, two, three steps away, then unrated).
+static bool in_tier(const Course *c, int d, bool hundred, int tier) {
+    if (hundred) {
+        bool rated = c->attempts >= MIN_RATED;
+        int fail = rated ? 100 - (int)(c->clears * 100ull / c->attempts) : 0;
+        return tier == 0 ? rated && fail >= BAND[d][0] && fail <= BAND[d][1] : tier == 1 ? rated : !rated;
+    }
+    int band = smm2_band(c);
+    return tier == 4 ? band < 0 : band >= 0 && (band == d - tier || band == d + tier);
+}
+
+// Queue random pool courses of the tier that are (not) among the recently played (pool_lock held).
+static void take(Run *r, int d, bool hundred, int tier, bool played) {
+    int idx[2048], n = 0;
+    for (int i = 0; i < npool && n < 2048; i++) {
+        const Course *c = &pool[i];
+        if (c->endless && !in_run(r, c->code) && seen_has(c->code) == played && in_tier(c, d, hundred, tier)) idx[n++] = i;
+    }
+    while (n > 0 && r->nqueue < QUEUE_AHEAD) {
+        int k = (int)rnd((unsigned)n);
+        r->queue[r->nqueue++] = pool[idx[k]];
+        idx[k] = idx[--n];
+    }
+}
+
+// Top the run's queue up from the pool (lock held; may fetch). Fresh courses of the difficulty's own tier come first, and
+// more of OCW's list is fetched while there are few of them; only then the ones played lately, then wider tiers.
 static void refill(Run *r, int d, bool hundred) {
     if (r->nqueue >= QUEUE_AHEAD) return;
     int tiers = hundred ? 3 : 5;
     pthread_mutex_lock(&pool_lock);
-    for (int round = 0; round < 3 && r->nqueue < QUEUE_AHEAD; round++) {
-        for (int tier = 0; tier < tiers && r->nqueue < QUEUE_AHEAD; tier++) {
-            int idx[2048], n = 0;
-            for (int i = 0; i < npool && n < 2048; i++) {
-                const Course *c = &pool[i];
-                if (!c->endless || in_run(r, c->code)) continue;
-                bool ok;
-                if (hundred) {
-                    bool rated = c->attempts >= MIN_RATED;
-                    int fail = rated ? 100 - (int)(c->clears * 100ull / c->attempts) : 0;
-                    ok = tier == 0 ? rated && fail >= BAND[d][0] && fail <= BAND[d][1] : tier == 1 ? rated : !rated;
-                } else {
-                    int band = smm2_band(c);
-                    ok = tier == 4 ? band < 0 : band >= 0 && (band == d - tier || band == d + tier);
-                }
-                if (ok) idx[n++] = i;
-            }
-            while (n > 0 && r->nqueue < QUEUE_AHEAD) {
-                int k = (int)rnd((unsigned)n);
-                r->queue[r->nqueue++] = pool[idx[k]];
-                idx[k] = idx[--n];
-            }
-            if (r->nqueue >= QUEUE_AHEAD) break;
-            if (tier == 0 && r->nqueue >= 2) break;  // (enough in the band for now; widening is the last resort)
-        }
-        if (r->nqueue >= 2 || round == 2) break;
+    for (int fetch = 0;; fetch++) {
+        take(r, d, hundred, 0, false);
+        if (r->nqueue >= FRESH_WANTED || fetch == FETCHES_PER_REFILL || npool >= POOL_MAX) break;
         pool_fill();
+    }
+    for (int round = 0; r->nqueue < 2 && round < 3; round++) {
+        take(r, d, hundred, 0, true);
+        for (int tier = 1; tier < tiers && r->nqueue < 2; tier++) {
+            take(r, d, hundred, tier, false);
+            take(r, d, hundred, tier, true);
+        }
+        if (r->nqueue < 2 && round < 2) pool_fill();
     }
     pthread_mutex_unlock(&pool_lock);
 }
@@ -347,6 +378,9 @@ static void load(void) {  // (lock held, once)
         }
         get_runs(json_get(j, "runs"), runs);
         get_runs(json_get(j, "smm2_runs"), smm2_runs);
+        Json *sn = json_get(j, "seen");
+        for (size_t i = 0; i < json_len(sn); i++)
+            if (*json_str(json_at(sn, i), "")) seen_add(json_str(json_at(sn, i), ""));
         json_free(j);
     }
     free(buf);
@@ -428,6 +462,7 @@ static void push_done(Run *r, const Course *c, bool clear) {
     if (r->nhist == HISTORY_MAX) memmove(r->hist, r->hist + 1, sizeof(Done) * (HISTORY_MAX - 1)), r->nhist--;
     Done *dn = &r->hist[r->nhist++];
     dn->c = *c, dn->clear = clear, dn->seq = ++r->seq;
+    seen_add(c->code);
 }
 
 static void queue_remove(Run *r, int i) {
@@ -455,6 +490,7 @@ static int run_result(Run *r, int d, bool hundred, const char *body, HttpRespons
         queue_remove(r, at);
         done = hundred && r->clears >= (unsigned)GOAL[d];
     } else if (!strcmp(what, "death") || !strcmp(what, "start_over")) {
+        seen_add(c.code);
         r->lives = r->lives ? r->lives - 1 : 0;  // (the same course again: it stays at the head)
         if (at) { Course t = r->queue[at]; memmove(r->queue + 1, r->queue, sizeof(Course) * (size_t)at); r->queue[0] = t; }
     } else if (!strcmp(what, "skip")) {
