@@ -219,6 +219,21 @@ static int mod_toggles(const GameModToggle **out) {
     t_hundred = !strcmp(g_mod.ruleset, "hundred");
     t_tgrcode = !strcmp(g_mod.courses, "tgrcode");
     t_costumes = costumes_setting();
+    if (net_backend_setting() == NET_BACKEND_OCW) {  // (the courses are OpenCourse World's: no switch for their source)
+        static GameModToggle ocw[3];
+        int n = 0;
+        for (size_t i = 0; i < sizeof toggles / sizeof *toggles; i++) {
+            if (toggles[i].value == &t_tgrcode) continue;
+            ocw[n] = toggles[i];
+            if (toggles[i].value == &t_hundred)
+                ocw[n].desc = "Course World's Endless Challenge opens SMM1's 100 Mario Challenge: 100 lives, 8 / 16 / 16 / "
+                              "6 courses, SMM1's rules and screens; B there leads on to SMM2's own Endless Challenge. Off: "
+                              "the button opens SMM2's own Endless Challenge only. Both play courses from OpenCourse World.";
+            n++;
+        }
+        *out = ocw;
+        return n;
+    }
     *out = toggles;
     return (int)(sizeof toggles / sizeof *toggles);
 }
