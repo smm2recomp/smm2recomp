@@ -431,9 +431,12 @@ static void bcourse(Buf *b, const Course *c) {
          styles[c->style % 5], c->theme, c->uploaded, c->plays, c->attempts, c->clears, c->likes);
 }
 
+// (the status says "active" only once a course is cleared: SMM2's Endless menu offers Continue only then [endless.c
+// endless_menu_offers_continue], and the 100 Mario select must agree with it, or its Continue goes to a menu that
+// shows New Game alone and the course never starts)
 static void brun(Buf *b, const Run *r, int goal) {
     bput(b, "{\"active\":%s,\"complete\":%s,\"lives\":%u,\"clears\":%u,\"coins\":%u,\"score\":%u,\"goal\":%d}",
-         r->active ? "true" : "false", r->complete ? "true" : "false", r->lives, r->clears, r->coins, r->score, goal);
+         r->active && r->clears ? "true" : "false", r->complete ? "true" : "false", r->lives, r->clears, r->coins, r->score, goal);
 }
 
 static int reply(HttpResponse *r, int status, Buf *b) {
