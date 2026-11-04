@@ -47,6 +47,9 @@ static volatile uint64_t broken_tap;     // the Challenge Modes button was tappe
 static volatile int tab_target = -1;     // a difficulty to select with L / R
 static volatile int tab_presses;
 static volatile bool tab_moved;          // L / R were pressed (or the handler used): the focus is on the tab bar
+static volatile bool page_stale;         // switched from SMM2's Endless: the page still shows SMM2's run (its
+                                         // Continue / New Game buttons) until its tab changes (issue #67)
+static volatile int tab_via = -1;        // a tab passed on the way to tab_target, so the page redraws (page_stale)
 static volatile uint64_t menu_page, menu_seen;
 static volatile uint64_t back_since, disappear_seen;  // B to Course World asked (hundred_flow_exit); the menu's
                                                       // Disappear last ran  // the Endless menu page and the frame it was last in Disp
@@ -264,15 +267,26 @@ static void *driver(void *arg) {
             // one wanted (calling the tab's handler directly can leave the buttons without a focus when Continue
             // goes away); after 12 presses, the handler (menu_disp)
             int cur = (int)g32(MAIN_ADDR(0x2c3f618));
-            if (cur == tab_target) {
+            // (after a switch from SMM2's Endless the page still shows SMM2's run on the difficulty it was left on:
+            // its Continue, with the focus on it, while the records say 100 Mario's. Already on the difficulty
+            // wanted, a tab next to it first, so coming back redraws the buttons from the records - issue #67)
+            if (page_stale && cur == tab_target && tab_via < 0) {
+                tab_via = tab_target ? tab_target - 1 : 1;
+                MLOG("bridge: the menu still shows SMM2's run: difficulty %d first, so it redraws\n", tab_via);
+            }
+            int want = tab_via >= 0 ? tab_via : tab_target;
+            if (tab_via >= 0 && cur == tab_via) {
+                tab_via = -1, page_stale = false, tab_presses = 0, drv_since = now;
+            } else if (cur == tab_target) {
                 MLOG("bridge: difficulty %d on the menu\n", tab_target);
                 tab_target = -1, tab_presses = 0, drv_since = now;
                 mod_shot("tab", 60), mod_shot("tab", 95);
             } else if (tab_presses >= 12) {
-                pending_tab = tab_target, tab_target = -1, tab_presses = 0, tab_moved = true;
+                pending_tab = tab_target, tab_target = -1, tab_via = -1, tab_presses = 0, tab_moved = true;
             } else if (t >= 30) {
-                b = cur < tab_target ? BTN_R : BTN_L;
+                b = cur < want ? BTN_R : BTN_L;
                 tab_moved = true;
+                if (tab_via < 0) page_stale = false;  // (arriving on tab_target from another tab redraws the page)
                 if (t >= 38) tab_presses++, drv_since = now;
             }
             g_test_buttons = b;
@@ -512,7 +526,7 @@ static void select_pending_tab(Cpu *c, uint64_t page) {
     s32(MAIN_ADDR(0x2c3f618), (uint32_t)(d + 1) % 4);
     if (c->x[0]) guest_call(c, MENU_TAB0 + 0xc0ull * (uint64_t)d);
     memcpy(c->x, save, sizeof save);
-    pending_tab = -1;
+    pending_tab = -1, page_stale = false;
     MLOG("bridge: difficulty %d selected\n", d);
 }
 
@@ -539,6 +553,9 @@ static void menu_disp(Cpu *c) {
         if (mod_hundred_offered() && settled && mode_switch_pressed(now0)) {
             LOG("[mod] bridge: Challenge Modes: to the 100 Mario Challenge\n");
             switch_blocked = true;
+            // (the records are 100 Mario's from here on (endless_apply_mode), but the page keeps the buttons it
+            // drew for SMM2's run until its tab changes: hundred_run_start's L / R pass another tab first)
+            page_stale = true;
             mod_remember_mode(false);
             mod_set_smm2_session(false);
             hundred_flow_open();
@@ -1001,7 +1018,7 @@ bool hundred_run_start(int difficulty, bool resume_saved) {
     pthread_once(&once, driver_start);
     endless_prepare_run(difficulty, resume_saved);
     run_d = difficulty;
-    tab_target = difficulty, tab_presses = 0, tab_moved = false;
+    tab_target = difficulty, tab_via = -1, tab_presses = 0, tab_moved = false;
     suspending = paused = false;
     set_drv(resume_saved ? DRV_CONTINUE : DRV_NEW_GAME);
     mod_shot("menu", 60), mod_shot("menu", 330);
