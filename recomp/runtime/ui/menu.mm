@@ -700,8 +700,21 @@ static void tab_display(void) {
                "nothing on a 60 Hz display.");
 
     opt_section("Game");
+    const bool is_smm2 = !strcmp(GAME_ID, "smm2");
+    const bool intro_locked = is_smm2 && g_settings.skip_mode_select;  // (Skip mode select takes over from launch)
+    if (intro_locked) opt_disable_next();
     if (opt_toggle("Skip intro", &g_settings.skip_intro, false,
-                   "Skips the opening logos and goes straight to the title screen when the game starts.")) {
+                   intro_locked ? "Not available while Skip mode select is on: it replaces Skip intro. Skip mode select is a combo "
+                                  "of no intro video and no mode select, so it already skips the logos itself. Turn Skip mode "
+                                  "select off to use this on its own."
+                                : "Skips the opening logos and goes straight to the title screen when the game starts.")) {
+        settings_save();
+    }
+    if (is_smm2 &&  // (Super Mario Maker 2's: mods/skip_intro.c)
+        opt_toggle("Skip mode select", &g_settings.skip_mode_select, false,
+                   "Replaces Skip intro: a combo of no intro video and no mode select. Goes from launch straight into "
+                   "Course World, with no logos, no L+R and no choosing a mode, all hidden behind the black start-up "
+                   "screen. Because it includes Skip intro, Skip intro is unavailable while this is on.")) {
         settings_save();
     }
 #ifdef GAME_LA_SETTINGS  // (Link's Awakening's, from the runtime this one shares: nothing in other games)

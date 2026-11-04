@@ -23,6 +23,7 @@ Settings g_settings = {
     .reverb = true,
     .movie_audio = true,
     .skip_intro = false,
+    .skip_mode_select = false,
     .show_fps = false,
     .show_memory = false,
     .inv_keys = true,
@@ -100,6 +101,7 @@ void settings_load(void) {
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
         else if (!strcmp(key, "skip_intro")) g_settings.skip_intro = atoi(val) != 0;
+        else if (!strcmp(key, "skip_mode_select")) g_settings.skip_mode_select = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
         else if (!strcmp(key, "ahead_fast")) g_settings.ahead_fast = atoi(val) != 0;
@@ -156,6 +158,8 @@ void settings_load(void) {
     if (g_settings.volume > 2) g_settings.volume = 2;
     const char *si = getenv("RECOMP_SKIP_INTRO");
     if (si) g_settings.skip_intro = atoi(si) != 0;
+    const char *sm = getenv("RECOMP_SKIP_MODE_SELECT");
+    if (sm) g_settings.skip_mode_select = atoi(sm) != 0;
     LOG("[settings] loaded %s\n", SETTINGS_FILE);
 }
 
@@ -169,6 +173,7 @@ void settings_save(void) {
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
     fprintf(f, "skip_intro = %d\n", g_settings.skip_intro);
+    fprintf(f, "skip_mode_select = %d\n", g_settings.skip_mode_select);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
     fprintf(f, "ahead_fast = %d\n", g_settings.ahead_fast);

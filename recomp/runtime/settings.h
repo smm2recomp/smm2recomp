@@ -67,6 +67,7 @@ typedef struct {
     int hearts;          // index into g_heart_colours (0 = Default red)
     char rando_seed[128];  // active randomizer seed (rando/<name>/), empty = vanilla
     bool skip_intro;     // skip the boot logo presentation animations
+    bool skip_mode_select;  // SMM2: press L+R on the title screen and open Course World by itself (games/smm2/mods/skip_intro.c)
     int theme;           // THEME_*: the look of the menu (Video tab > Theme)
     bool ahead_fast;     // prepare shaders at full speed (all cores, no waiting for quiet moments): Video > Shaders
 } Settings;
