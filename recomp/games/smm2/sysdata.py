@@ -11,6 +11,7 @@ hactool's output is never shown (it can echo key values), only whether each step
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -51,15 +52,55 @@ def nca_path(entry):
 FAILS = []  # (exit code, output) of the NCAs hactool couldn't read, for the error
 EMPTY = {}  # data titles found but extracted to nothing: title -> hactool's last words
 MII_MODEL = '0100000000000802'  # (required: SMM2 stops at its first Mii without it, issue #28)
+REVISION = {}  # NCA path -> the master key its contents are encrypted with (hactool's "Master Key Revision")
+# the firmware that first used each master key (21.0.0 = 0x14 checked on a dump; later ones are left unnamed)
+FIRST_FIRMWARE = {0x0: '1.0.0', 0x1: '3.0.0', 0x2: '3.0.1', 0x3: '4.0.0', 0x4: '5.0.0', 0x5: '6.0.0', 0x6: '6.2.0',
+                  0x7: '7.0.0', 0x8: '8.1.0', 0x9: '9.0.0', 0xa: '9.1.0', 0xb: '12.1.0', 0xc: '13.0.0', 0xd: '14.0.0',
+                  0xe: '15.0.0', 0xf: '16.0.0', 0x10: '17.0.0', 0x11: '18.0.0', 0x12: '19.0.0', 0x13: '20.0.0',
+                  0x14: '21.0.0'}
 
 
 def title_id(hactool, keys, nca):
     r = run([hactool, '-k', keys, '--disablekeywarns', '-t', 'nca', nca])
+    tid = None
     for line in r.stdout.splitlines():
-        if line.strip().startswith('Title ID:'):
-            return line.split(':', 1)[1].strip().lower()
+        s = line.strip()
+        if s.startswith('Title ID:'):
+            tid = s.split(':', 1)[1].strip().lower()
+        elif s.startswith('Master Key Revision:'):  # "0x14 (Unknown)": a number, not a key value
+            try:
+                REVISION[nca] = int(s.split(':', 1)[1].split()[0], 16)
+            except (IndexError, ValueError):
+                pass
+    if tid:
+        return tid
     FAILS.append((r.returncode, r.stdout + r.stderr))
     return None
+
+
+def master_keys_in(keys):
+    """The master key numbers prod.keys has, directly or as the kek hactool makes one from (names only)."""
+    have = set()
+    with open(keys, errors='replace') as f:
+        for line in f:
+            m = re.match(r'\s*master_ke[yk]_([0-9a-fA-F]{2})\s*=', line)
+            if m:
+                have.add(int(m.group(1), 16))
+    return have
+
+
+def keys_older_than(keys, ncas):
+    """None, or the error for a prod.keys without the master key these NCAs' contents need: its header key opens
+    a newer firmware's headers (title ids are read) but the contents come out as garbage ("section 0 is corrupted")."""
+    need = max((REVISION.get(p, 0) for p in ncas), default=0)
+    have = master_keys_in(keys)
+    if not need or need in have:
+        return None
+    def name(n):
+        return f'master_key_{n:02x}' + (f' (firmware {FIRST_FIRMWARE[n]})' if n in FIRST_FIRMWARE else '')
+    top = max(have) if have else None
+    return (f'prod.keys is older than the firmware: its system files need {name(need)}, and the newest master key in '
+            f'prod.keys is ' + (name(top) if top is not None else 'missing'))
 
 
 def why_none():
@@ -134,6 +175,11 @@ def main():
     print(f'sysdata: {nf} shared font files, {nd} data archives'
           + (f' (not in this firmware: {", ".join(missing)})' if missing else ''))
     print('@progress 1', flush=True)
+    old = keys_older_than(a.keys, [p for tid, p in found.items() if tid in EMPTY or tid in FONT_TITLES and not nf])
+    if old:
+        fail('KEYS_OLD', old,
+             'Dump prod.keys again from your console with a Lockpick_RCM version that supports its firmware version '
+             '(an older Lockpick_RCM still writes a prod.keys, without the newest keys), then run setup again.')
     if not found:
         why = why_none()
         print(f'sysdata: {len(FAILS)} NCAs unreadable{why}', flush=True)
