@@ -838,7 +838,14 @@ static unsigned test_input(uint64_t frame) {
 static LQuads g_last;
 static bool g_worker_on;
 const uint8_t *smw_goal_image(int *w, int *h, int *full, uint64_t *seq);  // (mods/smw_goal.c: its circle)
+const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq);  // (mods/title_letters: SMM1's letters)
 void smw_goal_poll(void);
+// what the other mods draw when the flow has nothing on screen: the SMW goal wipe's circle, else the title letters'
+// animations, or none
+static const uint8_t *other_mods_image(int *w, int *h, int *full, uint64_t *seq) {
+    const uint8_t *img = smw_goal_image(w, h, full, seq);
+    return img ? img : title_letters_image(w, h, full, seq);
+}
 
 // Once per presented frame (renderers, runtime/ui/menu.mm): tick the flow, queue this frame's image, return the
 // newest finished one (RGBA8 1280 x 720; *full: opaque, the game's frame hidden), or NULL for none. *seq changes
@@ -879,7 +886,7 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         g_has_front = false;
         F.full = F.captured = false;
         F.may_start = true;
-        return smw_goal_image(w, h, full, seq);  // (nothing of the flow's: the SMW goal wipe's circle, or none)
+        return other_mods_image(w, h, full, seq);  // (nothing of the flow's)
     }
     tick(b);
     LQuads *q = &g_last;
@@ -905,8 +912,7 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
     const uint8_t *img = any && g_has_front ? g_front : NULL;
     *w = W, *h = H, *full = g_front_full, *seq = g_front_seq;
     pthread_mutex_unlock(&g_img);
-    if (!img) return smw_goal_image(w, h, full, seq);  // (nothing of the flow's on screen, e.g. a run's course: the
-                                                       // SMW goal wipe's circle there too, or none)
+    if (!img) return other_mods_image(w, h, full, seq);  // (nothing of the flow's on screen, e.g. a run's course)
     return img;
 }
 #endif

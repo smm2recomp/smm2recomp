@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "../smm1/lyt.h"
+
 // in SMM1's reading order (SMM1's own ids put I and K last: not used here)
 enum TitleLetter { TL_NONE = -1, TL_SUPER, TL_M1, TL_A1, TL_R1, TL_I, TL_O, TL_M2, TL_A2, TL_K, TL_E, TL_R2, TL_COUNT };
 
@@ -26,3 +28,12 @@ bool title_letters_active(void);      // switch on and the title scene running
 bool title_letters_box(int letter, TlBox *out);  // the SMM2 pane's box this frame
 void title_letters_hide(int letter, bool hidden);
 void title_letters_reset(void);       // on leaving the title scene: panes shown again, animations dropped
+// the overlay (smm1/flow.c chains it after the SMW goal wipe's): RGBA8 1280 x 720 or NULL, as smw_goal_image
+const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq);
+
+// ---- anim.c (ticks: 60 Hz, one clock for both threads)
+bool tl_anim_start(int letter, int tick);      // false: ignored (the letter plays, or its layout is missing)
+bool tl_anim_busy(int letter, int tick);       // SMM1's letter is drawn: SMM2's pane stays hidden
+void tl_anim_box(int letter, const TlBox *b);  // where SMM2's pane is (each frame: the logo may move)
+void tl_anim_reset(void);
+bool tl_anim_draw(int tick, LQuads *out);      // (the renderers' thread) false: nothing to draw

@@ -3,6 +3,9 @@
 //
 //   test_smm1ui <out.png> <Layout> [Anim@frame ...] [text:Pane=UTF-8 ...] [hide:Pane] [show:Pane]
 //   test_smm1ui --flow <out_%04d.png> <screen> <first> <last> [step]   (the 100 Mario screens, see flow_test in flow.c)
+//   test_smm1ui --title-letter <LETTER> <out_%04d.png> <first> <last> [step] [second tap]   (an SMM1 title letter's
+//       animation at SMM2's letter, games/smm2/mods/title_letters/anim.c; LETTER: SUPER, M, A, R, I, O, M2, A2, K, E,
+//       R2; tapped at frame 1, the toggles I and K again at <second tap>)
 //
 // Run from a data folder (the cache is generated into ./mods-generated); built by tools/test_smm1ui.sh.
 #include <stdio.h>
@@ -14,6 +17,7 @@
 #include "../games/smm2/mods/smm1/smm1_data.h"
 #include "../games/smm2/mods/smm1/bfres.h"
 #include "../games/smm2/mods/smm1/smm1_audio.h"
+#include "../games/smm2/mods/title_letters/title_letters.h"
 #include <math.h>
 
 // ---- a minimal PNG writer (stored deflate blocks)
@@ -75,6 +79,58 @@ int write_png(const char *path, const uint8_t *rgba, int w, int h) {
     return 0;
 }
 
+// SMM2's letter panes at rest on its title (game pixels; from a run: the logo's chain of translations and scales)
+static TlBox smm2_pane(int letter) {
+    static const float tx[TL_COUNT] = {-224, -301, -231, -167, -121, -68, 28, 98, 162, 222, 284};
+    float cx = 590 + tx[letter], cy = letter == TL_SUPER ? 166 : 242, w = letter == TL_SUPER ? 223.2f : 76.8f;
+    float h = letter == TL_SUPER ? 62 : 76.8f;
+    return (TlBox){cx - w / 2, cy - h / 2, w, h, true};
+}
+static int title_letter_main(int argc, char **argv) {
+    if (argc < 5) {
+        fprintf(stderr, "--title-letter <LETTER> <out_%%04d.png> <first> <last> [step] [second tap]\n");
+        return 2;
+    }
+    int letter = TL_NONE;
+    for (int i = 0; i < TL_COUNT; i++)
+        if (!strcmp(argv[1], tl_letter_name[i])) letter = i;
+    if (letter == TL_NONE) { fprintf(stderr, "no letter %s\n", argv[1]); return 2; }
+    long first = atol(argv[3]), last = atol(argv[4]), step = argc > 5 ? atol(argv[5]) : 1;
+    long tap2 = argc > 6 ? atol(argv[6]) : -1;
+    if (step < 1) step = 1;
+    for (int i = 0; i < TL_COUNT; i++) { TlBox b = smm2_pane(i); tl_anim_box(i, &b); }
+    uint8_t *px = malloc(1280 * 720 * 4);
+    LQuads q = {0};
+    for (long t = 1; t <= last; t++) {
+        if (t == 1 || t == tap2)
+            fprintf(stderr, "frame %ld: tap %s\n", t, tl_anim_start(letter, (int)t) ? "plays" : "ignored");
+        bool busy = tl_anim_busy(letter, (int)t);
+        q.n = 0;
+        bool any = tl_anim_draw((int)t, &q);  // (also on frames not written: the layout is loaded at the first)
+        if (t < first || (t - first) % step) continue;
+        const uint8_t board[4] = {216, 216, 208, 255};  // (SMM2's logo board, roughly)
+        lyt_clear(px, 1280, 720, board);
+        TlBox b = smm2_pane(letter);  // (SMM2's pane: a red frame)
+        for (int x = (int)b.x; x <= (int)(b.x + b.w); x++)
+            for (int k = 0; k < 2; k++) {
+                uint8_t *p = px + ((size_t)(k ? (int)(b.y + b.h) : (int)b.y) * 1280 + (size_t)x) * 4;
+                p[0] = 255, p[1] = p[2] = 0;
+            }
+        for (int y = (int)b.y; y <= (int)(b.y + b.h); y++)
+            for (int k = 0; k < 2; k++) {
+                uint8_t *p = px + ((size_t)y * 1280 + (size_t)(k ? (int)(b.x + b.w) : (int)b.x)) * 4;
+                p[0] = 255, p[1] = p[2] = 0;
+            }
+        if (any) lyt_raster(&q, px, 1280, 720, 1280, 720);
+        char path[512];
+        snprintf(path, sizeof path, argv[2], (int)t);
+        write_png(path, px, 1280, 720);
+        fprintf(stderr, "frame %ld: %s, %d quads -> %s\n", t, busy ? "SMM1's letter" : "SMM2's letter", q.n, path);
+    }
+    free(px);
+    return 0;
+}
+
 __attribute__((weak)) int flow_test_main(int argc, char **argv) {  // flow.c's, when linked
     (void)argc, (void)argv;
     fprintf(stderr, "built without the flow\n");
@@ -103,6 +159,7 @@ int main(int argc, char **argv) {
     }
     if (!smm1_data_open()) return 1;
     if (!strcmp(argv[1], "--flow")) return flow_test_main(argc - 1, argv + 1);
+    if (!strcmp(argv[1], "--title-letter")) return title_letter_main(argc - 1, argv + 1);
     if (!strcmp(argv[1], "--lanky")) {  // --lanky <sheet.png>: the Slim Mario models (mods/smm1/costume_gen.c), shown
         extern bool lanky_generate(void), lanky_sheet(const char *path);
         return lanky_generate() && lanky_sheet(argv[2]) ? 0 : 1;

@@ -8,6 +8,10 @@
 // title goes some other way, the mod notices that no state ran for a while and forgets the panes without touching
 // them (they went with the page). Addresses v3.0.3; research in research/specs/smm2-title-scene.md (private).
 //
+// A tapped letter plays its SMM1 animation (anim.c) over SMM2's letter, which is hidden meanwhile; the animations are
+// drawn by the renderers' thread into the overlay (title_letters_image, after the 100 Mario flow's and the SMW goal
+// wipe's: smm1/flow.c). The SMM1 dump is opened on a thread of its own the first time the title shows.
+//
 // RECOMP_TITLE_LETTERS_LOG=1: each letter's box when the panes are found.
 #include <math.h>
 #include <pthread.h>
@@ -15,8 +19,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "../mod.h"
+#include "../smm1/smm1_data.h"
 #include "title_letters.h"
 
 #define T_WAIT MAIN_ADDR(0x1867580)      // title page states (x0 the state owner)
@@ -55,7 +61,8 @@ static struct {
     uint64_t page;
     uint64_t path[TL_COUNT][MAX_DEPTH];  // RootPane ... the letter's pane
     int depth[TL_COUNT];
-    TlBox box[TL_COUNT];
+    TlBox box[TL_COUNT];                 // for taps (neighbours trimmed: tl_trim)
+    TlBox pane[TL_COUNT];                // the panes' own boxes
     bool hidden[TL_COUNT];               // hidden by us (its visible bit was set)
     bool down;                           // the touch, as last seen
     int start;                           // the letter the touch went down on
@@ -64,6 +71,13 @@ static struct {
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_seen;          // presented frame of the last state call (0: none)
 static _Atomic bool g_on_title;
+static _Atomic int g_data;               // the SMM1 dump: 0 not opened yet, 1 open, -1 none
+
+static int now_tick(void) {  // (60 Hz, both threads: the renderers may present more frames than the game runs)
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int)((double)t.tv_sec * 60 + (double)t.tv_nsec * 60e-9);
+}
 
 bool title_letters_active(void) {
     uint64_t seen = g_seen;
@@ -73,7 +87,7 @@ bool title_letters_active(void) {
 bool title_letters_box(int letter, TlBox *out) {
     if (letter < 0 || letter >= TL_COUNT || !title_letters_active()) return false;
     pthread_mutex_lock(&g_lock);
-    *out = T.box[letter];
+    *out = T.pane[letter];
     bool ok = T.depth[letter] > 0;
     pthread_mutex_unlock(&g_lock);
     return ok;
@@ -96,6 +110,7 @@ void title_letters_hide(int letter, bool hidden) {
 }
 
 static void forget(void) {  // (no pane is touched: they may be gone)
+    tl_anim_reset();
     pthread_mutex_lock(&g_lock);
     memset(&T, 0, sizeof T);
     T.start = TL_NONE;
@@ -153,18 +168,28 @@ static TlBox box_of(int letter) {
 }
 
 static void read_boxes(void) {
-    TlBox b[TL_COUNT];
-    for (int i = 0; i < TL_COUNT; i++) b[i] = T.depth[i] ? box_of(i) : (TlBox){0};
+    TlBox b[TL_COUNT], p[TL_COUNT];
+    for (int i = 0; i < TL_COUNT; i++) p[i] = b[i] = T.depth[i] ? box_of(i) : (TlBox){0};
     tl_trim(b);
     pthread_mutex_lock(&g_lock);
-    memcpy(T.box, b, sizeof b);
+    memcpy(T.box, b, sizeof b), memcpy(T.pane, p, sizeof p);
     pthread_mutex_unlock(&g_lock);
+    for (int i = 0; i < TL_COUNT; i++) tl_anim_box(i, &p[i]);
 }
 
 // ---- the touch: a letter is tapped when the touch goes down and comes up on it (as SMM1's buttons: sliding off
 // cancels)
 static void letter_tapped(int letter, int32_t x, int32_t y) {
-    LOG("[title] letter %s at %d,%d\n", tl_letter_name[letter], x, y);
+    bool plays = g_data == 1 && tl_anim_start(letter, now_tick());
+    LOG("[title] letter %s at %d,%d%s\n", tl_letter_name[letter], x, y,
+        plays ? "" : g_data == 1 ? " (still playing: no new one)" : " (no SMM1 dump: nothing to play)");
+}
+
+static void *open_dump(void *arg) {
+    (void)arg;
+    g_data = smm1_data_open() ? 1 : -1;
+    LOG("[title] SMM1 dump %s\n", g_data == 1 ? "open: the letters play" : "not found: the letters do nothing");
+    return NULL;
 }
 
 static void follow_touch(bool taps) {
@@ -194,6 +219,9 @@ static void title_frame(uint64_t owner, bool taps) {
         if (!all) return;  // (not all there yet: again next frame)
         g_on_title = true;
         LOG("[title] letters on (page %#llx)\n", (unsigned long long)page);
+        static bool opening;
+        pthread_t th;
+        if (!opening && !pthread_create(&th, NULL, open_dump, NULL)) opening = true, pthread_detach(th);
         read_boxes();
         if (getenv("RECOMP_TITLE_LETTERS_LOG"))
             for (int i = 0; i < TL_COUNT; i++)
@@ -201,10 +229,26 @@ static void title_frame(uint64_t owner, bool taps) {
                     T.box[i].y, T.box[i].w, T.box[i].h, T.box[i].visible ? "" : " (hidden)");
     }
     g_seen = now;
-    for (int i = 0; i < TL_COUNT; i++)  // (ours stay hidden whatever SMM2's animations set)
-        if (T.hidden[i]) title_letters_hide(i, true);
     read_boxes();
     follow_touch(taps);
+    int tick = now_tick();
+    for (int i = 0; i < TL_COUNT; i++)  // (SMM1's letter drawn: SMM2's hidden, whatever SMM2's animations set)
+        title_letters_hide(i, tl_anim_busy(i, tick));
+}
+
+// ---- the overlay (the renderers' thread)
+const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq) {
+    static LQuads q;
+    static uint8_t *px;
+    static uint64_t n;
+    if (g_data != 1 || !title_letters_active()) return NULL;
+    q.n = 0;
+    if (!tl_anim_draw(now_tick(), &q)) return NULL;
+    if (!px && !(px = malloc(1280 * 720 * 4))) return NULL;
+    memset(px, 0, 1280 * 720 * 4);
+    lyt_raster(&q, px, 1280, 720, 1280, 720);
+    *w = 1280, *h = 720, *full = 0, *seq = 1ull << 48 | ++n;  // (its own numbers: the renderer uploads on a change)
+    return px;
 }
 
 // ---- the hooks

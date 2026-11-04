@@ -165,14 +165,31 @@ watches the touch, it takes nothing from the game. In game (seed 4, `/Volumes/SS
   - `bool tl_anim_draw(int tick, LQuads *out);` (false: nothing to draw)
   - `const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq);` (as `smw_goal_image`)
 
-- [ ] **Step 1: Offline render**: `test_smm1ui --title-letter <LETTER> <out_%04d.png> <first> <last>` renders the
+- [x] **Step 1: Offline render**: `test_smm1ui --title-letter <LETTER> <out_%04d.png> <first> <last>` renders the
   letter's button layout through its animations at the SMM2 letter's box. Expected: PNGs showing SMM1's letter
   animating (compare against the layout's own frames).
-- [ ] **Step 2: Implement** `anim.c`: the SMM1 letter's layout scaled and placed so its idle frame covers the SMM2
+- [x] **Step 2: Implement** `anim.c`: the SMM1 letter's layout scaled and placed so its idle frame covers the SMM2
   pane's box (scale from the two rectangles' heights), the SMM2 pane hidden while it plays, shown again after.
-- [ ] **Step 3: In-game test**: tap each letter, `mod_shot` at 20 / 60 / 120 frames after each tap. Expected: the
+- [x] **Step 3: In-game test**: tap each letter, `mod_shot` at 20 / 60 / 120 frames after each tap. Expected: the
   SMM1 animation over the logo, the SMM2 letter back afterwards; tapping during the animation does nothing extra.
-- [ ] **Step 4: Gate and commit**.
+- [x] **Step 4: Gate and commit**.
+
+**Task 3 outcome (2026-11-04):** as planned, with these changes. The layout is placed by its `B_Btn_00` (every
+button layout's touch box: R's pieces and M2's offset included; the glyph pane alone put R's bowl 100 px off), at
+the largest scale that fits SMM2's pane (min of the width and height ratios). anim.c's interface grew:
+`tl_anim_start` returns whether it plays (logged), and `tl_anim_busy` (SMM2's pane hidden), `tl_anim_box` (where the
+pane is each frame) and `tl_anim_reset` let the game thread and the renderers' thread share it under a lock; ticks
+are a 60 Hz clock, not presented frames. Layouts load on the renderers' thread only (the layout player isn't shared
+between threads); the SMM1 dump is opened on its own thread when the title first shows (switch on only). The
+overlay's sequence numbers have their own range (the renderer re-uploads on a change). I and K hold DecideA's end
+until the second tap plays DecideB. Offline: `test_smm1ui --title-letter` sheets in
+`/Volumes/SSD/smm-work/tl-dev/off3/` (M flips to W; R grows tall; A2 launches off the top and comes back from below,
+black, at frame 380; the parakeet lands on the I and leaves). In game (`run-3.log`, grid
+`/Volumes/SSD/smm-work/tl-dev/s3/grid.png`): every letter's SMM1 animation over the logo, SMM2's letter back after;
+a second M tap 30 frames in logs "still playing: no new one". Top state (`run-4.log`) works the same; tapping Make
+mid-A2 (`run-5.log`, `tl5.png`) logs "letters off: left the title" and the editor shows nothing left behind. Switch
+off (`run-6.log`, `tl6.png`): no `[title]` line, no dump opened, logo unchanged. (A tap anywhere puts SMM2's title in
+touch mode, its own behaviour: a pad A right after doesn't press Make.)
 
 ### Task 4: Sounds, screen effects and the sepia pass
 
