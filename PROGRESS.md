@@ -1,6 +1,16 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **SMM1 title letters (2026-11-04, on main, not released; Mac only, no iPad):** the owner's request, a mod off by
+  default ("SMM1 title letters", Look and sound; needs the SMM1 dump). On SMM2's title screen each logo letter does
+  what SMM1's did: its SMM1 animation over SMM2's letter, SMM1's sounds, and SUPER five Super Stars, M "Super Wario
+  Maker" + a Mystery Mushroom giving Wario's costume (SMB1, costumes mod on), A defeats the enemies on screen and
+  stars fall, R a coin, I the parakeet (no microphone: it chirps), O a Clown Car, M2 a Buzzy / Spiny Shell, A2 the
+  rocket then a screen clear, K sepia + SMM2's 8-bit title music, E a Trampoline, R2 a Shoe / Yoshi's Egg; a tap
+  behind spawns a Goomba / Koopa / rarely Bowser, a drag leaves magic dust. SMM1's caps, timings and its "one letter
+  at a time". Plan `docs/superpowers/plans/2026-11-04-smm1-title-letters.md` (outcome notes per task), docs
+  `recomp/docs/mods.md` ("SMM1 title letters"). Tested in SMB1 / SMB3 / SMW / NSMBU / 3D World title courses
+  (`/Volumes/SSD/smm-work/tl-dev/`); Windows / Linux only cross-compiled, not run.
 - **v0.6.4 (2026-11-01):** the iPad black screen solved. Every iPad session that reached its 11th course start froze
   there (all three logged, 206 guest CreateThreads each); the watchdog showed CourseIn queueing 0x80 every frame with no
   scene change, and the threads created at the result screen's Next started but never ran. Cause: kernel.c never joined

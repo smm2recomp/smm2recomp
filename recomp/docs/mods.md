@@ -696,6 +696,7 @@ menu's Mods tab (always shown), kept in `smm2mods.ini`; an environment variable 
 | Full death fanfare in pits (SMM1) | `smm1_long_down=1` | `RECOMP_SMM1_LONG_DOWN=1` | immediately |
 | One-way wall ledge (SMM1) | `smm1_oneway_ledge=1` | `RECOMP_SMM1_ONEWAY_LEDGE=1` | from the next course start |
 | Fire Flower wall climb (SMM1) | `smm1_fire_climb=1` | `RECOMP_SMM1_FIRE_CLIMB=1` | immediately |
+| SMM1 title letters | `smm1_title_letters=1` | `RECOMP_SMM1_TITLE_LETTERS=1` | immediately (title screen; see its section) |
 
 `RECOMP_SMM1_LOG=1` logs every decision the hooks see (`[smm1] ...`), on or off.
 
@@ -830,6 +831,73 @@ and in the Ryujinx trace build (`tools/replay_sync.py`'s comparison): 606 of 606
 12 KB player object and the input block too.
 
 ## The game's own network stack (backends local-nex and nextendo): a local NEX server and Nextendo Network
+## SMM1 title letters (`games/smm2/mods/title_letters/`)
+
+On SMM2's title screen, tapping or clicking a letter of the "SUPER MARIO MAKER" logo does what that letter did on
+SMM1's title screen: the letter plays its SMM1 animation over SMM2's letter, SMM1's sounds play, and something happens
+on the title course behind it. Off by default: the Mods tab's "SMM1 title letters" switch (group "Look and sound"),
+`smm1_title_letters=1` in `smm2mods.ini`, or `RECOMP_SMM1_TITLE_LETTERS=1`. It needs the player's **SMM1 dump** (the
+same one as the 100 Mario screens): the letters' layouts and sounds are read from it at run time, nothing is shipped.
+Without it the letters do nothing (the switch's description says so). With the switch off no hook changes anything
+and no SMM1 file is opened. The letters work in the "Press L + R" screen, the Make / Play screen and the Play menu;
+SMM2's own buttons there work as before (the mod only watches the touch).
+
+| Letter | What it does |
+|---|---|
+| SUPER | bounces; a voice calls "Super Mario Maker" (rarely a whisper), with an echo; five Super Stars come out |
+| M | turns into a W ("Super Wario Maker") and back; Wario's voice (a watery one in an underwater course); in the SMB1 style, a Mystery Mushroom that gives Wario's costume (only with the Mystery Mushroom costumes mod on: SMM2 has no Mystery Mushroom of its own) |
+| A | train whistle; every enemy on screen at the tap is defeated, a few a frame from 18 frames on, the rest when the A's animation ends; then multicoloured stars fall |
+| R | its legs grow; cash register on the press, "ta-da" on the tap; a coin pops out where its leg ends |
+| I | the parakeet lands on the I, chirps, sings once and flies off on a second tap or after 3 s |
+| O | timpani roll and hit; a Koopa Clown Car (Junior Clown Car in the NSMBU style) |
+| M2 | a metal clang and a boom; an empty Buzzy Shell, or 1 time in 10 a Spiny Shell |
+| A2 | the Reset Rocket: countdown, launch, return (380 frames); when it is back, every enemy and item on screen vanishes |
+| K | the picture turns sepia (SMM1's sepia filter) with old-film noise, and the title music becomes its 8-bit version at the same point of the tune; K again turns both back |
+| E | a hand drum; a Trampoline |
+| R2 | grows and turns around; an empty Goomba's Shoe (SMB1, SMB3) or a Yoshi's Egg (SMW, NSMBU) from its leg's end |
+| elsewhere | a tap on the course behind the title spawns a Goomba (Galoomba in SMW), a Koopa or, rarely, Bowser; a drag leaves a trail of magic dust with Kamek's magic sound |
+
+As in SMM1: one actor per tap; no other letter or background tap is taken while a letter's animation plays (I and K,
+which stay on, don't block); a background tap needs 20 frames since the last; SMM1's limits of under 100 live enemies
+(and under 100 items, at most 100 coins) spawned this way; Bowser 1 time in 50, at most 3 alive, at most one per 30
+background taps (the 30th gives one if chance gave none). Spawned enemies can defeat the title course's Mario; the
+course then starts again without them (SMM1 too). Leaving the title (Make, Coursebot, Course World, Story Mode) while
+a letter plays, the rocket is up, the parakeet sits or K is on puts everything back: the logo, the colours, the music;
+the spawned actors go with the title course.
+
+**What differs from SMM1:**
+- The parakeet: SMM1's recorded the GamePad's microphone and played it back changed. No microphone is used here: it
+  sings one of its own chirps at a random pitch instead.
+- K turns SMM2's logo sepia too (it is part of SMM2's picture; SMM1's logo was not filtered). The 8-bit music is
+  SMM2's own `BGM_Title_FC` (same length and loop as `BGM_Title`), cross-faded in over a second at the same sample.
+- A's falling stars and the drag's dust are our own sprites (SMM1's effect files aren't read), drawn over the game's
+  picture, so A's stars fall in front of SMM2's logo (in SMM1 they fell behind it).
+- A2: SMM2 has no Reset Rocket; the clear is SMM2's own vanish (the puff of an erased enemy) on every enemy, item and
+  object of the enemy kind on screen.
+- The 3D World style (none in SMM1) has no Clown Car, Buzzy Shell, Goomba's Shoe or Yoshi's Egg: O, R2 and M2's Buzzy
+  Shell only play their animation and sounds there.
+- SMM2's logo stands over terrain in some title courses. An actor made inside terrain is gone at once, so a letter's
+  actor that is tries again 40 px lower, then higher, until one stays. Two title courses (an SMB1 underground one,
+  a 3D World ghost house) frame the logo in a closed pocket: the letters' actors stay in it.
+- The SUPER stars each get their own push (SMM1 numbers its five stars); R's coin pops upward, as a blaster's.
+
+**How.** Hooks on the title page's state functions (Wait, ToTop, Top, ToPlayMenu, PlayMenu; ToEdit and the scene
+requests to leave) read the logo's panes (`P_Super_00`, `P_LogoM_00` ...) each frame and follow the touch
+(`title_letters.c`, `hit.c`). A letter's SMM1 button layout (`Play_Title<X>Btn_0n`) is played by the SMM1 layout
+player and drawn into the mods' overlay with SMM2's pane hidden meanwhile (`anim.c`). Sounds: each button's own SMM1
+sound bank with SMM1's volumes, pitches and delays (`effects.c`, `smm1_audio`); K: the runtime's colour filter
+(`renderer_set_color_filter`) and the title music's voices fed `BGM_Title_FC` (`audren_swap_*`). Actors: SMM2's own
+general actor create in the player's area at the letter's point (`spawn.c`); defeats are SMM2's Super Star attack on
+each enemy, the clear SMM2's death with the vanish reaction. Each letter's course effect and its moment: `letters.c`.
+Research (private): `research/specs/smm1-title-letters.md`, `research/specs/smm2-title-scene.md`.
+
+**Tests.** `RECOMP_TITLE_LETTERS_LOG=1` logs the panes' boxes, spawns, defeats and clears (`[title] ...`; taps,
+sounds and the dump are logged anyway). `RECOMP_TITLE_LETTERS_SPAWN=<kind>[:<vx>:<vy>],...` makes background taps
+spawn those kinds in turn; `RECOMP_TITLE_LETTERS_DO=defeat@<n>,clear@<n>` defeats / clears at title frame n. Taps by
+`LARECOMP_HOST_INPUT` (`<frame>:tap:<x>/<y>:<frames>`); a title course is forced with a mod folder holding ten copies
+of one course (`RECOMP_MOD_DIR`). `tools/test_smm1ui --title-letter <LETTER> ...` renders a letter's animation
+without the game; `make test-title-letters` checks the hit-testing.
+
 ## SMW goal wipe (`games/smm2/mods/smw_goal.c`)
 
 In Super Mario World style courses, a goal-tape clear in real play ends the way SMW's levels do: once the fanfare is

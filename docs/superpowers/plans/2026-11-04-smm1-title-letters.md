@@ -339,8 +339,15 @@ ghost house) frame the logo in a closed pocket: the letters' actors stay in it.
 **Files:**
 - Modify: `recomp/docs/mods.md` (the mod's section), `PROGRESS.md`
 
-- [ ] **Step 1: Document** what each letter does, that it needs the SMM1 dump, that it is off by default, and what
+- [x] **Step 1: Document** what each letter does, that it needs the SMM1 dump, that it is off by default, and what
   differs from SMM1 (the parakeet replays game sound, no microphone).
-- [ ] **Step 2: Final checks**: a fresh run with the switch off (title unchanged), `scripts/check.sh`, and a Linux
+- [x] **Step 2: Final checks**: a fresh run with the switch off (title unchanged), `scripts/check.sh`, and a Linux
   or Windows cross-compile of the new files.
-- [ ] **Step 3: Commit and push** to main (no release, no iPad install unless the owner asks).
+- [x] **Step 3: Commit and push** to main (no release, no iPad install unless the owner asks).
+
+**Task 7 outcome (2026-11-04):** `recomp/docs/mods.md` has the section "SMM1 title letters" (each letter, the
+background, SMM1's rules, the differences from SMM1, how, tests) and a row in the SMM1 extras table; PROGRESS.md an
+entry. Final checks: a fresh switch-off run (`/Volumes/SSD/smm-work/tl-dev/t6/final_off.log`, shot
+`shots/final_off_1.png`): no `[title]` line, no SMM1 dump opened, the title as SMM2's; `scripts/check.sh` passed; the
+changed C files cross-compile for x86_64-windows-gnu and x86_64-linux-gnu with zig (`t6/cross1.log`). Pushed to main;
+no release, no iPad build.
