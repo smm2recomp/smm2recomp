@@ -11,6 +11,8 @@
 //   RECOMP_SMM1_LONG_DOWN=1     smm1_long_down=1       the death fanfare plays to its end after a pit fall, as in SMM1
 //   RECOMP_SMM1_ONEWAY_LEDGE=1  smm1_oneway_ledge=1    a sideways one-way wall has SMM1's ledge on its blocked side
 //   RECOMP_SMM1_FIRE_CLIMB=1    smm1_fire_climb=1      NSMBU: a throw ends in Fall even mid-twirl (the wall climb)
+//   RECOMP_SMM1_TITLE_LETTERS=1 smm1_title_letters=1   the title logo's letters do what SMM1's did when tapped
+//                                                      (mods/title_letters)
 //
 // The behaviour comes from the game's own code: host hooks after single instructions (games/smm2/mods/smm1_extras.py
 // lists them) change a register or the flags while a setting is on, and do nothing otherwise. What SMM1 does was
@@ -28,6 +30,7 @@
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;  // (runtime/game_hooks.c)
 
 static bool shell_jumps, overlap_pipes, smm1_card, pound_hop, spin_catch, long_down, oneway_ledge, fire_climb;
+bool g_title_letters;  // (mods/title_letters/title_letters.h)
 
 static const struct Setting {
     const char *key, *env;
@@ -41,6 +44,7 @@ static const struct Setting {
     {"smm1_long_down", "RECOMP_SMM1_LONG_DOWN", &long_down},
     {"smm1_oneway_ledge", "RECOMP_SMM1_ONEWAY_LEDGE", &oneway_ledge},
     {"smm1_fire_climb", "RECOMP_SMM1_FIRE_CLIMB", &fire_climb},
+    {"smm1_title_letters", "RECOMP_SMM1_TITLE_LETTERS", &g_title_letters},
 };
 #define NSETTINGS (sizeof settings / sizeof *settings)
 
@@ -74,6 +78,10 @@ void mod_ini_set(const char *key, const char *val);  // (settings.c: replace or 
 bool hundred_smm1_card(void) {  // (hundred.h; the flow asks on its render thread)
     load();
     return smm1_card;
+}
+bool smm1_title_letters(void) {  // (mods/title_letters: its hooks ask on the game thread)
+    load();
+    return g_title_letters;
 }
 
 // ---- the Mods tab (settings.c appends these to its own)
@@ -118,6 +126,10 @@ int smm1_extras_toggles(GameModToggle *out, int room) {
          "even during a twirl, so the wall can be grabbed mid-twirl (SMM2 kept Mario in the throw until the twirl "
          "was over). Immediately.",
          &shown[7], false},
+        {"SMM1 title letters",
+         "On the title screen, tap or click a letter of the logo and it does what that letter did on SMM1's title "
+         "screen. Needs your SMM1 dump (without it the letters do nothing). Immediately.",
+         &shown[8], false},
     };
     load();
     int n = 0;

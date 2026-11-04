@@ -13,6 +13,8 @@ GAME_MOVIES    := 0
 GAME_SRC       := $(wildcard games/smm2/*.c) $(wildcard games/smm2/mods/*.c)
 # The host-drawn SMM1 100 Mario screens (layout player, flow, ending): games/smm2/mods/smm1
 GAME_SRC       += $(wildcard games/smm2/mods/smm1/*.c)
+# SMM1's title letters on SMM2's title screen (a mod, off by default): games/smm2/mods/title_letters
+GAME_SRC       += $(wildcard games/smm2/mods/title_letters/*.c)
 # Guest symbols replaced by host code before recompiling (one mangled name per line; empty: none)
 GAME_HLE       := games/smm2/hle_symbols.txt
 # Per-instruction patches for the generator (none yet)

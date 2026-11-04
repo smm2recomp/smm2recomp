@@ -125,20 +125,29 @@ wasn't drawn: Task 5 starts there.
   - `void title_letters_reset(void);` (called on leaving the title scene)
   - `extern bool g_title_letters;` (the switch)
 
-- [ ] **Step 1: Write the failing test** `test_title_letters.c`: `tl_hit` returns the letter for each box's centre,
+- [x] **Step 1: Write the failing test** `test_title_letters.c`: `tl_hit` returns the letter for each box's centre,
   `TL_NONE` 1 px outside every edge, `TL_NONE` for a hidden box, and the later box for overlapping boxes.
-- [ ] **Step 2: Run** `make -C recomp test-title-letters`. Expected: FAIL (no `tl_hit`).
-- [ ] **Step 3: Implement `tl_hit`** in `hit.c`.
-- [ ] **Step 4: Run** the test. Expected: PASS.
-- [ ] **Step 5: The switch** in `smm1_extras.c` (key `smm1_title_letters`, default false, "Look and sound" group;
+- [x] **Step 2: Run** `make -C recomp test-title-letters`. Expected: FAIL (no `tl_hit`).
+- [x] **Step 3: Implement `tl_hit`** in `hit.c`.
+- [x] **Step 4: Run** the test. Expected: PASS.
+- [x] **Step 5: The switch** in `smm1_extras.c` (key `smm1_title_letters`, default false, "Look and sound" group;
   description says it needs the SMM1 dump and works on the title screen by tapping or clicking a letter).
-- [ ] **Step 6: Title hooks** from Task 1's spec: set active on the title scene's enter / update, `title_letters_reset`
+- [x] **Step 6: Title hooks** from Task 1's spec: set active on the title scene's enter / update, `title_letters_reset`
   on leave; read the panes' boxes each frame; on a tap (`touch_first`, lifted inside a box, as `flow.c` does) log
   `[title] letter <NAME>`.
-- [ ] **Step 7: In-game test**: switch on via `RECOMP_MOD_INI`, `LARECOMP_HOST_INPUT` taps at every letter's centre
+- [x] **Step 7: In-game test**: switch on via `RECOMP_MOD_INI`, `LARECOMP_HOST_INPUT` taps at every letter's centre
   and one at an empty spot; expected: eleven `[title] letter` lines in order and none for the empty spot. Switch
   off: no `[title]` lines.
-- [ ] **Step 8: Gate and commit**: `scripts/check.sh && git commit`.
+- [x] **Step 8: Gate and commit**: `scripts/check.sh && git commit`.
+
+**Task 2 outcome (2026-11-04):** as planned, plus: `tl_trim` (hit.c, tested) cuts neighbouring letter boxes where
+they overlap (SMM2's letter panes are 76.8 px wide but stand 46-70 px apart: R's covered half of I); the sources are
+added in `games/smm2/game.mk` (the Makefile takes `GAME_SRC` from there); the hooks are Wait / Top / PlayMenu (taps)
+and ToTop / ToPlayMenu (boxes only), with ToEdit and ToCourseRobot / ToNetwork / ToQuest resetting; a state not
+followed (ToWait) is covered by re-finding the panes after 30 frames without a call and showing ours again if they
+are still the page's. SMM2's title takes no taps on the logo (a tap there in Wait does nothing), so the mod only
+watches the touch, it takes nothing from the game. In game (seed 4, `/Volumes/SSD/smm-work/tl-dev/run-1.log`): eleven
+`[title] letter` lines in order, none for the empty spot; switch off (`run-2.log`): no `[title]` line.
 
 ### Task 3: The letters' SMM1 animations
 

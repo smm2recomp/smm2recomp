@@ -265,7 +265,7 @@ static const struct { const char *name; const char *labels[8]; } GROUPS[] = {
      {"Mid-air shell jumps", "Ground pound hop", "Catch while spin jumping", "Muncher hit box", "One-way wall ledge",
       "Fire Flower wall climb"}},
     {"SMM1 Course Maker", {"Overlapping pipes"}},
-    {"Look and sound", {"SMW goal wipe", "Full death fanfare"}},
+    {"Look and sound", {"SMW goal wipe", "Full death fanfare", "SMM1 title letters"}},
     {"Courses", {"Courses:", "No word filter", "Play courses the game calls broken"}},
 };
 static int group_of(const char *label) {

@@ -530,6 +530,14 @@ build/test_system_font: tools/test_system_font.mm runtime/ui/system_font.mm runt
 test-ui: build/test_system_font
 	build/test_system_font
 
+# The SMM1 title letters' hit-testing (games/smm2/mods/title_letters/hit.c), no game files
+TL_DIR := games/smm2/mods/title_letters
+build/test_title_letters: tools/test_title_letters.c $(TL_DIR)/hit.c $(TL_DIR)/title_letters.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -o $@ tools/test_title_letters.c $(TL_DIR)/hit.c
+test-title-letters: build/test_title_letters
+	./build/test_title_letters
+
 # Shader compile-ahead alone: scan a RomFS folder, translate, compile (tools/test_shader_ahead.m)
 build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c runtime/nvn/shader_ahead.h runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/nvn/maxwell/shader.h runtime/zstd_lib.c
 	clang -O2 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shader_ahead.m runtime/nvn/shader_ahead.c \
@@ -538,4 +546,4 @@ build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c ru
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui test-title-letters smm2 run-smm2 package embed-server app app-macos apk install push-data
