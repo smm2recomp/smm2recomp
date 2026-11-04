@@ -1,7 +1,7 @@
 // SMM1 title letters (a mod, off by default): on SMM2's title screen each letter of the logo does what that letter did
 // on SMM1's title screen when tapped or clicked. Letters map by letter to SMM2's logo panes (P_Super_00, P_LogoM_00
 // ...); SMM2's "2" is no letter. Hooks and state: title_letters.c; hit-testing: hit.c (pure, unit-tested by
-// tools/test_title_letters.c); the SMM1 animations: anim.c.
+// tools/test_title_letters.c); the SMM1 animations: anim.c; actors on the title course: spawn.c.
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,3 +37,20 @@ bool tl_anim_busy(int letter, int tick);       // SMM1's letter is drawn: SMM2's
 void tl_anim_box(int letter, const TlBox *b);  // where SMM2's pane is (each frame: the logo may move)
 void tl_anim_reset(void);
 bool tl_anim_draw(int tick, LQuads *out);      // (the renderers' thread) false: nothing to draw
+
+// ---- spawn.c (the game thread, inside the title's hooks: between tl_spawn_frame and tl_spawn_done; screen points
+// in game pixels, velocities in course px per frame, y up). Each kind is the style's own actor: the Galoomba in SMW,
+// Junior's Clown Car in NSMBU, the Shoe in SMB1 / SMB3 and Yoshi's Egg in SMW / NSMBU; 3D World has no Clown Car,
+// Buzzy Shell, Shoe or Egg; the Mystery Mushroom is the costumes mod's item (SMB1, that mod on).
+struct Cpu;
+enum TlActor { TA_GOOMBA, TA_KOOPA, TA_BOWSER, TA_COIN, TA_TRAMPOLINE, TA_CLOWN_CAR, TA_BUZZY_SHELL, TA_SPINY_SHELL,
+               TA_SHOE, TA_YOSHI_EGG, TA_MYSTERY_MUSHROOM, TA_STAR, TA_COUNT };
+bool tl_spawn(int actor, float screen_x, float screen_y, float vx, float vy);  // false: the style lacks it, or capped
+void tl_defeat_enemies(void);                 // every enemy on screen, as a Super Star's touch
+void tl_clear_screen(void);                   // every enemy, item and coin on screen vanishes in a puff
+const char *tl_actor_name(int actor);         // "Goomba" ... (logs)
+int tl_game_style(void);                      // the title course's style: 0 SMB1 .. 4 3D World, -1 none
+void tl_background_tap(float sx, float sy);   // a tap off the letters: a Goomba, a Koopa or rarely Bowser
+void tl_spawn_frame(struct Cpu *c);           // each title frame, before the taps: the guest CPU, live counts
+void tl_spawn_done(void);
+void tl_spawn_reset(void);                    // left the title (the actors go with the course)

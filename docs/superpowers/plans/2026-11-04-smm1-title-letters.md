@@ -233,13 +233,35 @@ touch mode, its own behaviour: a pad A right after doesn't press Make.)
   - `void tl_defeat_enemies(void);` and `void tl_clear_screen(void);`
   - `int tl_game_style(void);`
 
-- [ ] **Step 1: `tl_spawn` for a Goomba** at a screen point; in-game test: background tap → a Goomba where tapped
+- [x] **Step 1: `tl_spawn` for a Goomba** at a screen point; in-game test: background tap → a Goomba where tapped
   (screenshot).
-- [ ] **Step 2: The other kinds**, each checked by screenshot in an SMB1, NSMBU and SMW title course.
-- [ ] **Step 3: `tl_defeat_enemies` and `tl_clear_screen`** with screenshots before / after.
-- [ ] **Step 4: Caps** as SMM1's (Task 1 spec: under 100 items / enemies / coins; Bowser 1 in 50, at most 3 alive,
+- [x] **Step 2: The other kinds**, each checked by screenshot in an SMB1, NSMBU and SMW title course.
+- [x] **Step 3: `tl_defeat_enemies` and `tl_clear_screen`** with screenshots before / after.
+- [x] **Step 4: Caps** as SMM1's (Task 1 spec: under 100 items / enemies / coins; Bowser 1 in 50, at most 3 alive,
   at most one per 30 taps, forced on the 30th; tap cooldown 20 frames): 50 background taps respect them.
-- [ ] **Step 5: Gate and commit**.
+- [x] **Step 5: Gate and commit**.
+
+**Task 5 outcome (2026-11-04):** the Task 1 "Goomba" was not one: v3.0.3 renumbered the actor profiles (Treeki's ids
+are v1.0.0's; v3.0.3's 87 is the Superball). With v3.0.3's ids (dumped from the profiles' own names at run time) the
+general create of Task 1 works unchanged in player 1's area, and every TlActor kind is drawn in SMB1, SMB3, SMW,
+NSMBU and 3D World title courses (`/Volumes/SSD/smm-work/tl-dev/t5/shots/k_*_b.png`). Interface as planned, plus
+`tl_actor_name`, `tl_background_tap` (the tap rule, with SMM1's odds and 20-frame cooldown), and
+`tl_spawn_frame` / `tl_spawn_done` / `tl_spawn_reset`: **tl_spawn works only inside the title's state hooks**
+(title_frame gives it the guest CPU; letter taps already run there). Kinds: Goomba (Galoomba in SMW), Koopa, Bowser
+(the style's; 3D World's is Meowser), coin (a free Coin actor pops, takes vx / vy, bounces, collectable), Trampoline,
+Clown Car (Junior's in NSMBU), Buzzy / Spiny Shell (the alternate form), Shoe (empty; SMB1 / SMB3), Yoshi's Egg
+(SMW / NSMBU), Mystery Mushroom (the costumes mod's Big Mushroom, SMB1, only with that mod on: `seed1b`, shot
+`mm_10.png`), Star. 3D World has no Clown Car, Buzzy Shell, Shoe or Egg: tl_spawn returns false. Defeat = SMM2's
+star attack on each enemy-base enemy on screen (they flip and fall); clear = SMM2's death with the vanish reaction
+for every enemy-base enemy, item and object on screen (puffs). Background taps miss the logo (and its gaps), the "2"
+and SMM2's buttons of the state. 65 taps (`caps2.log`): a cycle without a lucky Bowser got one on its 30th tap, a
+lucky one at tap 4 got none after; taps closer than 20 frames log "too soon". Switch off (`off.log`): no `[title]`
+line, nothing spawned. Tests: `RECOMP_TITLE_LETTERS_SPAWN=<kind>[:vx:vy],...`, `RECOMP_TITLE_LETTERS_DO=defeat@n,
+clear@n`; any title course is forced with a mod folder (spec §4b). For Task 6: spawned enemies can kill the title
+course's Mario (the course restarts, spawns gone); an actor made inside terrain (the logo stands over terrain in some
+courses) is destroyed at once, so letter spawns may want a point below the logo; the costumes mod together with a
+mod folder crashes at start-up, before the title (not this mod: the costume pack isn't laid with RECOMP_MOD_DIR), so
+test the Mystery Mushroom with `SMM2_SEED=1` (an SMB1 title course).
 
 ### Task 6: Each letter's full behaviour
 

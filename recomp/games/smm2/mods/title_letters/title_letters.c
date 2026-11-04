@@ -12,7 +12,10 @@
 // drawn by the renderers' thread into the overlay (title_letters_image, after the 100 Mario flow's and the SMW goal
 // wipe's: smm1/flow.c). The SMM1 dump is opened on a thread of its own the first time the title shows.
 //
-// RECOMP_TITLE_LETTERS_LOG=1: each letter's box when the panes are found.
+// A tap that starts and ends on the course behind the title (off the logo, its "2" and SMM2's buttons of the state:
+// the "Press L + R" bar in Wait, Make / Play in Top, the three Play choices in PlayMenu) spawns there (spawn.c).
+//
+// RECOMP_TITLE_LETTERS_LOG=1: each letter's box when the panes are found; spawns, defeats and clears.
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -45,9 +48,16 @@
 #define PANE_NAME 0xb0
 #define GONE_AFTER 30                    // presented frames without a state call: the title is gone
 
-static const char *const pane_name[TL_COUNT] = {"P_Super_00", "P_LogoM_00", "P_LogoA_00", "P_LogoR_00", "P_LogoI_00",
-                                                "P_LogoO_00", "P_LogoM_01", "P_LogoA_01", "P_LogoK_00", "P_LogoE_00",
-                                                "P_LogoR_01"};
+// the letters, then the panes a background tap must miss: the "2", and SMM2's own buttons in the states that show
+// them (block_in: bit 0 Wait, 1 Top, 2 PlayMenu)
+enum { NBLOCK = 7, NPANES = TL_COUNT + NBLOCK };
+static const char *const pane_name[NPANES] = {"P_Super_00", "P_LogoM_00", "P_LogoA_00", "P_LogoR_00", "P_LogoI_00",
+                                              "P_LogoO_00", "P_LogoM_01", "P_LogoA_01", "P_LogoK_00", "P_LogoE_00",
+                                              "P_LogoR_01", "P_Logo2_00", "W_PressKey_00", "L_EditBtn_00",
+                                              "L_PlayBtn_00", "L_QuestBtn_00", "L_NetworkBtn_00",
+                                              "L_CourseRobotPlayBtn_00"};
+static const uint8_t block_in[NBLOCK] = {7, 1, 2, 2, 4, 4, 4};
+enum { ST_WAIT = 1, ST_TOP = 2, ST_PLAYMENU = 4 };
 #define MAX_DEPTH 10
 
 extern uint64_t renderer_present_count(void);
@@ -59,13 +69,15 @@ static float g32f(uint64_t a) { float f; uint32_t w = g32(a); memcpy(&f, &w, 4);
 // ---- state (written by the game thread; boxes read by the renderers' thread under the lock)
 static struct {
     uint64_t page;
-    uint64_t path[TL_COUNT][MAX_DEPTH];  // RootPane ... the letter's pane
-    int depth[TL_COUNT];
+    uint64_t path[NPANES][MAX_DEPTH];    // RootPane ... the letter's pane (then the blockers')
+    int depth[NPANES];
     TlBox box[TL_COUNT];                 // for taps (neighbours trimmed: tl_trim)
     TlBox pane[TL_COUNT];                // the panes' own boxes
-    bool hidden[TL_COUNT];               // hidden by us (its visible bit was set)
+    bool hidden[NPANES];                 // hidden by us (its visible bit was set; letters only)
+    TlBox block[NBLOCK], logo;           // the blockers' boxes; the logo's (letters and "2")
     bool down;                           // the touch, as last seen
     int start;                           // the letter the touch went down on
+    bool bg;                             // ... or the background
     int32_t x, y;
 } T;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -111,6 +123,7 @@ void title_letters_hide(int letter, bool hidden) {
 
 static void forget(void) {  // (no pane is touched: they may be gone)
     tl_anim_reset();
+    tl_spawn_reset();
     pthread_mutex_lock(&g_lock);
     memset(&T, 0, sizeof T);
     T.start = TL_NONE;
@@ -144,8 +157,8 @@ static bool find_panes(uint64_t page) {
     memset(&T, 0, sizeof T);
     T.start = TL_NONE;
     T.page = page;
-    for (int i = 0; i < TL_COUNT; i++)
-        if (find_path(root, pane_name[i], T.path[i], 0, &T.depth[i])) found++;
+    for (int i = 0; i < NPANES; i++)
+        if (find_path(root, pane_name[i], T.path[i], 0, &T.depth[i])) found += i < TL_COUNT;
         else T.depth[i] = 0;
     pthread_mutex_unlock(&g_lock);
     return found == TL_COUNT;
@@ -175,6 +188,28 @@ static void read_boxes(void) {
     memcpy(T.box, b, sizeof b), memcpy(T.pane, p, sizeof p);
     pthread_mutex_unlock(&g_lock);
     for (int i = 0; i < TL_COUNT; i++) tl_anim_box(i, &p[i]);
+    float x0 = 1280, y0 = 720, x1 = 0, y1 = 0;  // (the logo: the gaps between its letters aren't background)
+    for (int i = 0; i < NBLOCK; i++) {
+        TlBox q = T.block[i] = T.depth[TL_COUNT + i] ? box_of(TL_COUNT + i) : (TlBox){0};
+        if (i) continue;
+        x0 = fminf(x0, q.x), y0 = fminf(y0, q.y), x1 = fmaxf(x1, q.x + q.w), y1 = fmaxf(y1, q.y + q.h);
+    }
+    for (int i = 0; i < TL_COUNT; i++)
+        if (p[i].w > 0) x0 = fminf(x0, p[i].x), y0 = fminf(y0, p[i].y), x1 = fmaxf(x1, p[i].x + p[i].w),
+                        y1 = fmaxf(y1, p[i].y + p[i].h);
+    T.logo = (TlBox){x0, y0, x1 - x0, y1 - y0, x1 > x0};
+}
+
+static bool in_box(const TlBox *b, int32_t x, int32_t y) {
+    return b->visible && x >= b->x && x < b->x + b->w && y >= b->y && y < b->y + b->h;
+}
+
+// a tap on the course behind the title: off the logo and off SMM2's buttons in this state
+static bool background(int state, int32_t x, int32_t y) {
+    if (!state || in_box(&T.logo, x, y)) return false;
+    for (int i = 0; i < NBLOCK; i++)
+        if ((block_in[i] & state) && in_box(&T.block[i], x, y)) return false;
+    return true;
 }
 
 // ---- the touch: a letter is tapped when the touch goes down and comes up on it (as SMM1's buttons: sliding off
@@ -192,18 +227,23 @@ static void *open_dump(void *arg) {
     return NULL;
 }
 
-static void follow_touch(bool taps) {
+static void follow_touch(int state) {
+    bool taps = state != 0;
     int32_t x = T.x, y = T.y;
     bool down = touch_first(&x, &y);
-    if (down && !T.down) T.start = taps ? tl_hit(T.box, x, y) : TL_NONE;
+    if (down && !T.down) {
+        T.start = taps ? tl_hit(T.box, x, y) : TL_NONE;
+        T.bg = T.start == TL_NONE && background(state, x, y);  // (a tap that starts and ends on the course)
+    }
     if (!down && T.down && T.start != TL_NONE && tl_hit(T.box, T.x, T.y) == T.start) letter_tapped(T.start, T.x, T.y);
-    if (!down) T.start = TL_NONE;
+    if (!down && T.down && T.bg && background(state, T.x, T.y)) tl_background_tap((float)T.x, (float)T.y);
+    if (!down) T.start = TL_NONE, T.bg = false;
     T.down = down;
     if (down) T.x = x, T.y = y;
 }
 
 // once per title frame, after the game's own state function
-static void title_frame(uint64_t owner, bool taps) {
+static void title_frame(Cpu *c, uint64_t owner, int state) {
     if (!smm1_title_letters() || !on_heap(owner)) return;
     uint64_t page = g64(owner + OWNER_PAGE), now = renderer_present_count(), seen = g_seen;
     if (!on_heap(page)) return;
@@ -227,13 +267,21 @@ static void title_frame(uint64_t owner, bool taps) {
             for (int i = 0; i < TL_COUNT; i++)
                 LOG("[title]   %-5s %s box %.1f %.1f %.1f x %.1f%s\n", tl_letter_name[i], pane_name[i], T.box[i].x,
                     T.box[i].y, T.box[i].w, T.box[i].h, T.box[i].visible ? "" : " (hidden)");
+        if (getenv("RECOMP_TITLE_LETTERS_LOG")) {
+            for (int i = 0; i < NBLOCK; i++)
+                LOG("[title]   blocks %s box %.1f %.1f %.1f x %.1f%s\n", pane_name[TL_COUNT + i], T.block[i].x,
+                    T.block[i].y, T.block[i].w, T.block[i].h, T.block[i].visible ? "" : " (hidden)");
+            LOG("[title]   logo box %.1f %.1f %.1f x %.1f\n", T.logo.x, T.logo.y, T.logo.w, T.logo.h);
+        }
     }
     g_seen = now;
     read_boxes();
-    follow_touch(taps);
+    tl_spawn_frame(c);
+    follow_touch(state);
     int tick = now_tick();
     for (int i = 0; i < TL_COUNT; i++)  // (SMM1's letter drawn: SMM2's hidden, whatever SMM2's animations set)
         title_letters_hide(i, tl_anim_busy(i, tick));
+    tl_spawn_done();
 }
 
 // ---- the overlay (the renderers' thread)
@@ -252,11 +300,15 @@ const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq) {
 }
 
 // ---- the hooks
-static void t_wait(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_WAIT); title_frame(o, true); }
-static void t_totop(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_TOTOP); title_frame(o, false); }
-static void t_top(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_TOP); title_frame(o, true); }
-static void t_toplaymenu(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_TOPLAYMENU); title_frame(o, false); }
-static void t_playmenu(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_PLAYMENU); title_frame(o, true); }
+static void t_wait(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_WAIT); title_frame(c, o, ST_WAIT); }
+static void t_totop(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_TOTOP); title_frame(c, o, 0); }
+static void t_top(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_TOP); title_frame(c, o, ST_TOP); }
+static void t_toplaymenu(Cpu *c) { uint64_t o = c->x[0]; guest_call_orig(c, T_TOPLAYMENU); title_frame(c, o, 0); }
+static void t_playmenu(Cpu *c) {
+    uint64_t o = c->x[0];
+    guest_call_orig(c, T_PLAYMENU);
+    title_frame(c, o, ST_PLAYMENU);
+}
 static void t_toedit(Cpu *c) { title_letters_reset(); guest_call_orig(c, T_TOEDIT); }
 static void t_to_robot(Cpu *c) { title_letters_reset(); guest_call_orig(c, T_TO_ROBOT); }
 static void t_to_network(Cpu *c) { title_letters_reset(); guest_call_orig(c, T_TO_NETWORK); }
