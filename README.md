@@ -112,6 +112,12 @@ aren't mods of this kind.
 |---|---|
 | ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
 
+**SMM1 features as mods**
+
+| Lanky Mario | Mystery Mushroom costume | SMW goal wipe |
+|---|---|---|
+| ![Lanky Mario, tall and stretched, jumping in an SMB1-style course](docs/screenshots/lanky-mario.jpg) | ![Mario in SMM1's Sonic costume running through an SMB1-style sky course](docs/screenshots/costume.jpg) | ![SMW's black circle closing on Mario after the goal tape](docs/screenshots/smw-goal-wipe.jpg) |
+
 ## Status
 
 **Early development.** Release packages for Windows, Linux and macOS are on the
