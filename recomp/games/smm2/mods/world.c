@@ -185,11 +185,11 @@ static bool post_ok(const char *path, const char *body) {
 }
 
 // ---- users (makers): the user record (0x1f0 bytes) as the game's converter (main+0x14d0a60) fills it from a NEX
-// UserInfo: maker code +0x08, name +0x30 (both UTF-16, the code without dashes), player id +0x58, Mii +0x9c, play
-// stats +0xfc.. (plays, clears, attempts, deaths), Endless best clears +0x114 + 4 * difficulty, maker stats +0x124
-// (likes received) / +0x128 (maker points), versus / co-op +0x130.., the courses uploaded +0x190 and the most the
-// maker may upload +0x194 (the NEX record's map +0x1a8, keys 0 / 1; My Info's "Courses uploaded" header shows the
-// page's record's, profile +0x2264c0 + 0x190 / +0x194, main+0x1aa46a0), "valid" +0x1ec.
+// UserInfo: maker code +0x08, name +0x30 (both UTF-16, the code without dashes), player id +0x58, Mii +0x9c, play stats
+// +0x100.. (played, attempts, cleared, lives lost), Endless best clears +0x114 + 4 * difficulty, maker stats +0x124
+// (likes received) / +0x128 (maker points), versus / co-op +0x130.., the courses uploaded +0x190 and the most the maker
+// may upload +0x194 (the NEX record's map +0x1a8, keys 0 / 1; My Info's "Courses uploaded" header shows the page's
+// record's, profile +0x2264c0 + 0x190 / +0x194, main+0x1aa46a0), "valid" +0x1ec.
 void user_entry_reset(uint64_t e);                                     // online.c
 void mii_default_charinfo(uint8_t out[0x58], const char *nickname);  // runtime/services/mii.c
 uint64_t mod_maker_pid(const char *maker_id, const char *name);

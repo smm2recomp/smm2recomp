@@ -131,8 +131,8 @@ void game_modules_loaded(void) {
 bool ocw_active(void) { return g_ocw.active; }
 
 // ---- Play History (My Info and a maker's page): the game's own GetUsers record comes from OCW's NEX side with no play
-// statistics, so they are filled in from OCW's REST API, which lists every course a maker played with their own
-// tries, deaths and clears:  GET https://<domain>/api/makers/<maker id>/played?offset=0&size=10000  (public: no token
+// statistics, so they are filled in from OCW's REST API: the maker's own totals, GET https://<domain>/api/makers/<id>
+// (stats), or, when that has none, the sum of their played list, GET .../played?offset=0&size=10000 (public: no token
 // is sent). The user record (0x1f0 bytes, world.c) holds the four numbers the screen shows at +0x100: courses played,
 // attempts, courses cleared, lives lost. The maker is read from the record the game just got (maker code +0x08, UTF-16
 // without dashes), so the player's own record and any maker's page work alike. A failed request leaves the record
