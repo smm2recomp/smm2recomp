@@ -64,8 +64,14 @@ the SMM1 summary below as its starting point.
   Car, Shoe / Egg, Wario costume in SMB1 only) pick the right one or do nothing in styles that lack it (3D World
   title courses). Task 6's test cycles the title courses.
 - **Repeated and rapid taps:** tapping the same letter while its animation plays, many letters at once, or 50 taps
-  in the background must not stack unbounded actors or overlays. Task 3 caps one animation per letter; Task 6 caps
-  live spawned actors (SMM1's own limits from Task 1, else 8).
+  in the background must not stack unbounded actors or overlays. Task 3 caps one animation per letter; Task 5 caps
+  live spawned actors with SMM1's own limits (Task 1 spec).
+
+**Task 1 outcome (2026-11-04):** specs written (`research/specs/smm1-title-letters.md`, `smm2-title-scene.md`).
+Letters are mapped by letter, not index (SMM2's logo has an extra "2"). SMM2 has no Reset Rocket and no Mystery
+Mushroom actor: A2 clears the screen itself after its animation, M spawns the Mystery Mushroom costumes mod's item
+when that mod is on. The general create (`main+0xe50830`) made a Goomba actor on the 3D World title course but it
+wasn't drawn: Task 5 starts there.
 
 ---
 
@@ -179,10 +185,11 @@ the SMM1 summary below as its starting point.
 - [ ] **Step 2: SUPER's five stars, A's falling stars, the drag trail**: drawn as layout quads (SMM1 effect textures
   if Task 1 finds them, else simple sprites of our own). In-game screenshots after each.
 - [ ] **Step 3: K: sepia and 8-bit music**: `renderer_set_sepia` (a colour matrix on the final image, before the
-  overlay), the title music swapped as Task 1 says; K again restores both. Screenshot on / off; test leaving the
+  overlay), SMM2's own `BGM_Title_FC` swapped in at the title music's position (same loop points), SMM1's Ef_Sepia
+  values; K again restores both. Screenshot on / off; test leaving the
   title with sepia on (it must turn off).
-- [ ] **Step 4: I: the parakeet** on the I, recording about 2 s of the game's own sound and replaying it altered
-  (pitch-shifted), then leaving. (SMM1 used the GamePad's microphone; no microphone is used here.)
+- [ ] **Step 4: I: the parakeet** lands on the I (DecideA), chirps and leaves (DecideB) on the second tap or after
+  SMM1's recorder time. (SMM1 recorded the GamePad's microphone; no microphone is used here.)
 - [ ] **Step 5: Gate and commit**.
 
 ### Task 5: Spawning on the title course
@@ -204,7 +211,8 @@ the SMM1 summary below as its starting point.
   (screenshot).
 - [ ] **Step 2: The other kinds**, each checked by screenshot in an SMB1, NSMBU and SMW title course.
 - [ ] **Step 3: `tl_defeat_enemies` and `tl_clear_screen`** with screenshots before / after.
-- [ ] **Step 4: Caps** (Task 1's limits, else 8 live spawned actors): 50 background taps leave at most the cap.
+- [ ] **Step 4: Caps** as SMM1's (Task 1 spec: under 100 items / enemies / coins; Bowser 1 in 50, at most 3 alive,
+  at most one per 30 taps, forced on the 30th; tap cooldown 20 frames): 50 background taps respect them.
 - [ ] **Step 5: Gate and commit**.
 
 ### Task 6: Each letter's full behaviour
