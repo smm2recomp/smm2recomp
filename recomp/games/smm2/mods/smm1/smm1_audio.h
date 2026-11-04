@@ -31,6 +31,6 @@ void smm1_play_vol(SPcm *p, float vol);      // ... at this volume (1: as decode
 // (60 Hz frames: it starts `delay` frames from now and is cut `stop` frames after; 0: none), looped if `loop` and its
 // wave loops. A handle for smm1_se_stop; 0: no such sound, -1: no voice free
 int smm1_se_ex(const char *name, float vol, float pitch, int delay, int stop, bool loop);
-void smm1_se_stop(int handle);
+bool smm1_se_stop(int handle);              // false: it was over (or no such sound)
 int smm1_se_frames(const char *name);  // a loaded sound's length in 60 Hz frames (0: none)
 void smm1_game_sound(bool on);               // the game's own sound under the screens (faded)

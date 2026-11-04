@@ -141,6 +141,7 @@ uint64_t vk_frame_counter(void);
 // ---- shaders / pipelines (shaders.c)
 VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  // NULL on failure (logged)
 VkShaderModule vk_builtin_shader(const char *name);  // internal shaders (clear, copy, present)
+VkShaderModule vk_builtin_shader_try(const char *name);  // ... VK_NULL_HANDLE if it fails to compile
 
 // ---- device / window (device.c)
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);

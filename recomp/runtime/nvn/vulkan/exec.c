@@ -3742,9 +3742,18 @@ static void copy_texture(const TexRefRec *src, const TexRefRec *dst, uint64_t fl
 static VkPipelineLayout present_layout;
 static VkDescriptorSetLayout present_set_layout;
 
-// filter: the colour filter's (color_filter.h: its rows are fragment push constants after the vertex stage's 32 bytes)
-static VkPipeline present_pipeline(VkFormat fmt, bool filter) {
+// filter: the colour filter's (color_filter.h: its rows are fragment push constants after the vertex stage's 32 bytes);
+// if its shader doesn't compile, the plain present (no filter) and false in *want
+static VkPipeline present_pipeline(VkFormat fmt, bool *want) {
     static struct { VkFormat f; bool filter; VkPipeline p; } cache[8];
+    static VkShaderModule filter_frag;
+    static bool filter_failed;
+    if (*want && !filter_frag && !filter_failed && !(filter_frag = vk_builtin_shader_try("present_filter.frag"))) {
+        filter_failed = true;
+        LOG("[vk] present_filter.frag failed to compile: no colour filter (the plain present)\n");
+    }
+    if (filter_failed) *want = false;
+    bool filter = *want;
     for (int i = 0; i < 8; i++) if (cache[i].p && cache[i].f == fmt && cache[i].filter == filter) return cache[i].p;
     if (!present_layout) {
         VkDescriptorSetLayoutBinding b = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
@@ -3760,7 +3769,7 @@ static VkPipeline present_pipeline(VkFormat fmt, bool filter) {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT,
          .module = vk_builtin_shader("present.vert"), .pName = "main"},
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-         .module = vk_builtin_shader(filter ? "present_filter.frag" : "present.frag"), .pName = "main"}};
+         .module = filter ? filter_frag : vk_builtin_shader("present.frag"), .pName = "main"}};
     VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
                                                  .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
@@ -3993,7 +4002,7 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
     VkImageView src = post_process(cb, b, pv[6] > 0 ? vw / pv[6] : vw, pv[7] > 0 ? vh / pv[7] : vh);
     float cf[12];
     bool filter = renderer_color_filter(cf);
-    VkPipeline p = present_pipeline(vk_frame_format(), filter);
+    VkPipeline p = present_pipeline(vk_frame_format(), &filter);
     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
     VkDescriptorImageInfo ii = {vk_default_sampler(true), src, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
@@ -4016,7 +4025,7 @@ TexBackend *vk_framegen_image(int i, uint32_t w, uint32_t h) { return post_image
 // Inside the window image's rendering: src over all of it
 void vk_present_copy(VkCommandBuffer cb, TexBackend *src) {
     static const float pv[8] = {0, 0, 0, 0, 0, 0, 1, 1};  // (no flip: our own image is upright; the whole of it)
-    VkPipeline p = present_pipeline(vk_frame_format(), false);
+    VkPipeline p = present_pipeline(vk_frame_format(), &(bool){false});
     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
     VkDescriptorImageInfo ii = {vk_default_sampler(true), post_view(src), VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,
@@ -4141,7 +4150,7 @@ void renderer_save_texture_tex(TexBackend *b, const char *path) {
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {w, h}}, .layerCount = 1,
                           .colorAttachmentCount = 1, .pColorAttachments = &ca};
     vkCmdBeginRendering(cb, &ri);
-    VkPipeline p = present_pipeline(VK_FORMAT_R8G8B8A8_UNORM, false);
+    VkPipeline p = present_pipeline(VK_FORMAT_R8G8B8A8_UNORM, &(bool){false});
     VkDescriptorSet ds = vk_alloc_set(present_set_layout);
     VkDescriptorImageInfo ii = {vk_default_sampler(true), raw_view(b), VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet wr = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0, .descriptorCount = 1,

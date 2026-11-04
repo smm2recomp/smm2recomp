@@ -294,8 +294,9 @@ void tl_background_tap(float sx, float sy) {
     int tap = g_taps + 1;
     if (!forced && ++g_taps >= 30) g_taps = 0, g_bowser_cycle = 0;
     bool ok = tl_spawn(kind, sx, sy, vx, vy);
-    LOG("[title] background tap at %.0f,%.0f: %s%s (tap %d of 30; %d Bowsers, %d enemy-type alive)\n", sx, sy,
-        kinds[kind].name, ok ? "" : " (not made)", tap, alive_of(TA_BOWSER), counted('A'));
+    LOG("[title] background tap at %.0f,%.0f: %s%s (tap %d of 30; %d Bowsers, %d enemy-type alive; title frame %llu)\n",
+        sx, sy, kinds[kind].name, ok ? "" : " (not made)", tap, alive_of(TA_BOWSER), counted('A'),
+        (unsigned long long)g_frame);
 }
 
 // ---- defeating and clearing
@@ -381,7 +382,7 @@ void tl_spawn_frame(struct Cpu *c) {
     if (g_log < 0) g_log = getenv("RECOMP_TITLE_LETTERS_LOG") != NULL;
     g_cpu = c;
     g_frame++;
-    static const char *todo = (const char *)1;  // (tests: RECOMP_TITLE_LETTERS_DO="defeat@<frame>,clear@<frame>")
+    static const char *todo = (const char *)1;  // (tests: RECOMP_TITLE_LETTERS_DO="defeat@<n>,clear@<n>,off@<n>")
     if (todo == (const char *)1) todo = getenv("RECOMP_TITLE_LETTERS_DO");
     for (const char *s = todo; s && *s; s = strchr(s, ',') ? strchr(s, ',') + 1 : "") {
         const char *at = strchr(s, '@');
@@ -389,6 +390,7 @@ void tl_spawn_frame(struct Cpu *c) {
         LOG("[title] test: %.*s at title frame %llu\n", (int)(at - s), s, (unsigned long long)g_frame);
         if (!strncmp(s, "defeat", 6)) tl_defeat_enemies();
         else if (!strncmp(s, "clear", 5)) tl_clear_screen();
+        else if (!strncmp(s, "off", 3)) g_title_letters = false;  // (the Mods tab's switch: off from the next frame)
     }
     if (!g_ntrack) return;
     uint64_t live[1024];

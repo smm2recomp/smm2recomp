@@ -48,6 +48,7 @@ static float frand(void) {  // (xorshift; 0 .. 1)
 static float frange(float a, float b) { return a + (b - a) * frand(); }
 
 // ---- sounds
+#define N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 typedef struct {
     const char *name;  // NULL: silence (a random group's "mute")
     float vol, p0, p1;  // volume; pitch, random between p0 and p1 (p1 0: p0)
@@ -55,10 +56,15 @@ typedef struct {
     float w;            // weight in a random group
 } Snd;
 
-static int play(const Snd *s, int extra_delay, bool loop) {
+// the title's sounds still playing or waiting to (A2's rocket comes 370 frames after its tap): stopped on leaving
+static int g_playing[32];  // (handles, the latest 32: more than the mixer's voices)
+
+static int play(const Snd *s, int extra_delay, bool loop) {  // (the lock held)
     if (!s->name) return 0;
     float pitch = s->p1 > 0 ? frange(s->p0, s->p1) : s->p0 > 0 ? s->p0 : 1;
     int d = s->delay + extra_delay, h = smm1_se_ex(s->name, s->vol, pitch, d, s->stop, loop);
+    static unsigned next;
+    if (h > 0) g_playing[next++ % N(g_playing)] = h;
     const char *res = h > 0 ? "played" : h < 0 ? "no voice free" : "not found";
     if (d) LOG("[title] sound %s (in %d frames): %s\n", s->name, d, res);
     else LOG("[title] sound %s: %s\n", s->name, res);
@@ -81,7 +87,6 @@ static const Snd *pick(const Snd *g, int n, int *last) {
     if (last) *last = k;
     return &g[k];
 }
-#define N(a) ((int)(sizeof(a) / sizeof((a)[0])))
 
 static const Snd TOUCH = {"SE_BongoCursol", 1, 3}, CANCEL = {"SE_Tyoi", 0.5f, 4};
 static const Snd TOUCH_R[] = {{"SE_LEGI", 1}};
@@ -455,6 +460,9 @@ void tl_effects_frame(int tick) {
 static void reset_locked(void) {
     if (S.k_on || S.sepia > 0) LOG("[title] K off: the picture and the title music back\n");
     k_off(false, 0);
+    int cut = 0;
+    for (int i = 0; i < N(g_playing); i++) cut += smm1_se_stop(g_playing[i]), g_playing[i] = 0;  // (over: no-ops)
+    if (cut) LOG("[title] %d title sounds stopped (playing or still to come)\n", cut);
     for (int i = 0; i < MAX_FX; i++) g_fx[i].life = 0;
     memset(&S, 0, sizeof S);
 }
@@ -467,7 +475,9 @@ void tl_effects_reset(void) {
 
 void tl_effects_lost(void) {  // (the renderers' thread: the title went without a word)
     pthread_mutex_lock(&g_lock);
-    if (S.k_on || S.sepia > 0 || S.i_on) reset_locked();
+    bool sounds = false;
+    for (int i = 0; i < N(g_playing); i++) sounds |= g_playing[i] > 0;
+    if (S.k_on || S.sepia > 0 || S.i_on || sounds) reset_locked();
     pthread_mutex_unlock(&g_lock);
 }
 

@@ -289,8 +289,8 @@ line, nothing spawned. Tests: `RECOMP_TITLE_LETTERS_SPAWN=<kind>[:vx:vy],...`, `
 clear@n`; any title course is forced with a mod folder (spec §4b). For Task 6: spawned enemies can kill the title
 course's Mario (the course restarts, spawns gone); an actor made inside terrain (the logo stands over terrain in some
 courses) is destroyed at once, so letter spawns may want a point below the logo; the costumes mod together with a
-mod folder crashes at start-up, before the title (not this mod: the costume pack isn't laid with RECOMP_MOD_DIR), so
-test the Mystery Mushroom with `SMM2_SEED=1` (an SMB1 title course).
+mod folder crashed at start-up (the costume pack wasn't laid with RECOMP_MOD_DIR; fixed in 0d1036a), so the Mystery
+Mushroom can be tested with a mod folder too, or with `SMM2_SEED=1` (an SMB1 title course).
 
 ### Task 6: Each letter's full behaviour
 

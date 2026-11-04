@@ -8,6 +8,7 @@
 // ADPCM coefficients per channel). Both written from public descriptions of the NW4F formats; the DSP-ADPCM decoder
 // follows SMCraft's mmk-formats audio/dsp.rs.
 #include <math.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -189,7 +190,9 @@ typedef struct {
     float vol;  // the sound's own volume (its .bameta; a stream's also its track's) times its mix factor below
     float pitch;      // (smm1_se_ex) a factor on the rate (0: 1)
     int wait, left;   // (smm1_se_ex) output samples before it starts; after which it stops (0: none)
+    int wait_f, left_f;  // (smm1_se_ex) the same in 60 Hz frames, made samples at the mixer's rate on its first mix
     int id;           // (smm1_se_ex) its handle
+    const char *name; // (smm1_se_ex; LARECOMP_SMM1_SE_LOG)
 } Voice;
 
 // SMM1's sounds against SMM2's mix: SMM1 played them through its own engine at its own output level, which SMM2's
@@ -351,24 +354,29 @@ void smm1_game_sound(bool on) { g_game_target = on ? 1 : 0; }
 // costumes) besides the screens' own; a bank past that is not loaded (once said in the log), never loaded twice
 #define SFX_BANKS 256
 #define SFX_SOUNDS 4096
+// Banks load on the SMM1 dump's thread (the title letters') and the game thread (the costumes'): g_banks and the
+// appends under g_bank_lock; a sound is written before g_nsfx counts it, so readers take no lock.
 static struct { char name[80]; SPcm *p; float vol; } g_sfx[SFX_SOUNDS];  // vol: as played (factor and cap in)
-static int g_nsfx;
+static _Atomic int g_nsfx;
 static char g_banks[SFX_BANKS][64];
 static int g_nbanks;
+static pthread_mutex_t g_bank_lock = PTHREAD_MUTEX_INITIALIZER;
 void smm1_se_bank(const char *bank) {
+    pthread_mutex_lock(&g_bank_lock);
     for (int i = 0; i < g_nbanks; i++)
-        if (!strcmp(g_banks[i], bank)) return;
+        if (!strcmp(g_banks[i], bank)) { pthread_mutex_unlock(&g_bank_lock); return; }
     if (g_nbanks == SFX_BANKS || g_nsfx == SFX_SOUNDS) {
         static bool said;
         if (!said) fprintf(stderr, "[smm1ui] sound banks full: %s not loaded\n", bank);
         said = true;
+        pthread_mutex_unlock(&g_bank_lock);
         return;
     }
-    snprintf(g_banks[g_nbanks++], 64, "%s", bank);
+    snprintf(g_banks[g_nbanks++], 64, "%s", bank);  // (held while it loads: a second caller waits for its sounds)
     size_t n;
     uint8_t *d = smm1_sound_file(bank, &n);
     LSarc s;
-    if (!d || !lyt_sarc_open(&s, d, n)) { free(d); return; }
+    if (!d || !lyt_sarc_open(&s, d, n)) { free(d); pthread_mutex_unlock(&g_bank_lock); return; }
     for (int i = 0; i < s.count && g_nsfx < SFX_SOUNDS; i++) {
         const char *nm = s.e[i].name, *dot = strstr(nm, ".bfwav");
         if (!dot) continue;
@@ -383,15 +391,18 @@ void smm1_se_bank(const char *bank) {
         if (m) amta_volumes(m, mn, &vol, track);
         // (a costume's bank: its waves are named "<bank>/<wave>", every costume has a "jump", a "goal"...)
         bool costume = !strncmp(bank, "CharaMario_", 11);
-        if (costume) snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%s/%.*s", bank, (int)(dot - nm), nm);
-        else snprintf(g_sfx[g_nsfx].name, sizeof g_sfx[0].name, "%.*s", (int)(dot - nm), nm);
+        int k = g_nsfx;
+        if (costume) snprintf(g_sfx[k].name, sizeof g_sfx[0].name, "%s/%.*s", bank, (int)(dot - nm), nm);
+        else snprintf(g_sfx[k].name, sizeof g_sfx[0].name, "%.*s", (int)(dot - nm), nm);
         vol *= se_mix(costume);
         if (level * vol > SMM1_SE_CAP) vol = SMM1_SE_CAP / level;
-        g_sfx[g_nsfx].vol = vol;
-        g_sfx[g_nsfx++].p = p;
+        g_sfx[k].vol = vol;
+        g_sfx[k].p = p;
+        g_nsfx = k + 1;  // (then readers see it)
     }
     lyt_sarc_close(&s);
     free(d);
+    pthread_mutex_unlock(&g_bank_lock);
 }
 bool smm1_se_has(const char *name) {
     for (int i = 0; i < g_nsfx; i++)
@@ -422,14 +433,14 @@ int smm1_se_ex(const char *name, float vol, float pitch, int delay, int stop, bo
     for (int i = 0; i < g_nsfx; i++)
         if (!strcmp(g_sfx[i].name, name)) {
             const SPcm *p = g_sfx[i].p;
-            int id = 0, per_frame = 48000 / 60;  // (the mixer's rate: audren's 48 kHz)
+            int id = 0;
             pthread_mutex_lock(&g_mx);
             for (int k = 0; k < SE_VOICES; k++)
                 if (!g_se[k].on) {
                     id = ++next > 0 ? next : (next = 1);
                     g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, loop && p->loop, true, 0, g_sfx[i].vol * vol};
-                    g_se[k].pitch = pitch > 0 ? pitch : 1, g_se[k].id = id;
-                    g_se[k].wait = delay > 0 ? delay * per_frame : 0, g_se[k].left = stop > 0 ? stop * per_frame : 0;
+                    g_se[k].pitch = pitch > 0 ? pitch : 1, g_se[k].id = id, g_se[k].name = g_sfx[i].name;
+                    g_se[k].wait_f = delay > 0 ? delay : 0, g_se[k].left_f = stop > 0 ? stop : 0;  // (mix_voice)
                     break;
                 }
             pthread_mutex_unlock(&g_mx);
@@ -443,20 +454,39 @@ int smm1_se_frames(const char *name) {
             return (int)((int64_t)g_sfx[i].p->frames * 60 / g_sfx[i].p->rate);
     return 0;
 }
-void smm1_se_stop(int id) {
-    if (id <= 0) return;
+static bool se_log(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("LARECOMP_SMM1_SE_LOG") && atoi(getenv("LARECOMP_SMM1_SE_LOG"));
+    return on;
+}
+bool smm1_se_stop(int id) {
+    if (id <= 0) return false;
+    bool was = false;
     pthread_mutex_lock(&g_mx);
     for (int k = 0; k < SE_VOICES; k++)
-        if (g_se[k].on && g_se[k].id == id) g_se[k].on = false;
+        if (g_se[k].on && g_se[k].id == id) {
+            if (se_log()) fprintf(stderr, "[smm1ui] sound %d %s stopped%s\n", id, g_se[k].name ? g_se[k].name : "",
+                                  g_se[k].wait_f || g_se[k].wait ? " (before it started)" : "");
+            g_se[k].on = false, was = true;
+        }
     pthread_mutex_unlock(&g_mx);
+    return was;
 }
 
 static void mix_voice(Voice *v, float *out, int n, int rate) {
     if (!v->on || !v->p) return;
     const SPcm *p = v->p;
+    if (v->wait_f || v->left_f) {  // (smm1_se_ex's frames, at this rate)
+        v->wait = (int)((int64_t)v->wait_f * rate / 60), v->left = (int)((int64_t)v->left_f * rate / 60);
+        v->wait_f = v->left_f = 0;
+        if (!v->wait && se_log() && v->id) fprintf(stderr, "[smm1ui] sound %d %s starts\n", v->id, v->name);
+    }
     double step = (double)p->rate / rate * (v->pitch > 0 ? v->pitch : 1);
     for (int i = 0; i < n; i++) {
-        if (v->wait > 0) { v->wait--; continue; }
+        if (v->wait > 0) {
+            if (--v->wait == 0 && se_log() && v->id) fprintf(stderr, "[smm1ui] sound %d %s starts\n", v->id, v->name);
+            continue;
+        }
         if (v->left > 0 && --v->left == 0) { v->on = false; return; }
         int k = (int)v->pos;
         if (k >= p->frames - 1) {

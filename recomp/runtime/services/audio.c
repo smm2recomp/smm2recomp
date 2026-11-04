@@ -147,7 +147,8 @@ static _Atomic int g_nswap;
 static _Atomic bool g_swap_on;
 static _Atomic int64_t g_swap_pos = -1;  // (tests) the stream position last played swapped
 static _Atomic uint64_t g_swap_done;     // (tests) samples played swapped
-static struct { uint64_t addr, size, sig; const SwapChan *s; int64_t base; } g_swap_wb[64];  // (the mixer's thread)
+#define SWAP_WB 256  // (buffers looked up: a buffer may be tried against each channel with its coefficients)
+static struct { uint64_t addr, size, sig; const SwapChan *s; int64_t base; } g_swap_wb[SWAP_WB];  // (mixer)
 static int g_swap_next;
 
 bool audren_swap_add(const int16_t coefs[16], const uint8_t *adpcm, size_t size, const int16_t *pcm, int stride,
@@ -165,11 +166,31 @@ void audren_swap(bool on) { g_swap_on = on && g_nswap > 0; }
 int64_t audren_swap_position(void) { return g_swap_pos; }
 uint64_t audren_swap_samples(void) { return g_swap_done; }
 
-static SwapChan *swap_for(const Voice *v) {  // (on, or still fading back)
+static bool swap_coefs(const SwapChan *s, const Voice *v) {
     const int16_t *k = (const int16_t *)(uintptr_t)v->ds_addr;
-    if (v->fmt != 6 || !k) return NULL;
+    return v->fmt == 6 && k && !memcmp(s->coefs, k, sizeof s->coefs);
+}
+
+// (the mixer's thread) a voice starts: the stream from its start all its own, or all the other's if the swap is on;
+// no fade left over from a voice before (one left the title fading back: the next title music began partly 8-bit)
+static void swap_voice_new(const Voice *v) {
     for (int i = 0; i < g_nswap; i++)
-        if ((g_swap_on || g_swap[i].mix > 0) && !memcmp(g_swap[i].coefs, k, sizeof g_swap[i].coefs)) return &g_swap[i];
+        if (swap_coefs(&g_swap[i], v)) {
+            float to = g_swap_on ? 1.f : 0.f;
+            if (g_swap[i].mix != to && getenv("LARECOMP_AUDIO_SWAP_LOG"))
+                LOG("[audren] swap: a voice starts on channel %d: its fade %.2f -> %.0f\n", i, g_swap[i].mix, to);
+            g_swap[i].mix = to;
+        }
+}
+
+static int64_t swap_base(const SwapChan *s, const WaveBuf *wb);
+// the channel a wave buffer is a piece of (on, or still fading back), and where (*base); channels with the same
+// coefficients (a stream's L and R may share them) are told apart by their data
+static SwapChan *swap_for(const Voice *v, const WaveBuf *wb, int64_t *base) {
+    *base = -1;
+    for (int i = 0; i < g_nswap; i++)
+        if ((g_swap_on || g_swap[i].mix > 0) && swap_coefs(&g_swap[i], v) && (*base = swap_base(&g_swap[i], wb)) >= 0)
+            return &g_swap[i];
     return NULL;
 }
 
@@ -180,14 +201,14 @@ static int64_t swap_base(const SwapChan *s, const WaveBuf *wb) {
     if (!d || m < 16) return -1;
     uint64_t sig = 0xcbf29ce484222325ull;
     for (size_t i = 0; i < m; i++) sig = (sig ^ d[i]) * 0x100000001b3ull;
-    for (int i = 0; i < 64; i++)
+    for (int i = 0; i < SWAP_WB; i++)
         if (g_swap_wb[i].s == s && g_swap_wb[i].addr == wb->addr && g_swap_wb[i].size == wb->size &&
             g_swap_wb[i].sig == sig)
             return g_swap_wb[i].base;
     int64_t base = -1;
     for (size_t o = 0; o + m <= s->size; o += 8)  // (the stream's ADPCM frames are 8 bytes, buffers start on one)
         if (s->adpcm[o] == d[0] && !memcmp(s->adpcm + o, d, m)) { base = (int64_t)(o / 8 * 14); break; }
-    int i = g_swap_next++ % 64;
+    int i = g_swap_next++ % SWAP_WB;
     g_swap_wb[i].addr = wb->addr, g_swap_wb[i].size = wb->size, g_swap_wb[i].sig = sig, g_swap_wb[i].s = s;
     g_swap_wb[i].base = base;
     if (getenv("LARECOMP_AUDIO_SWAP_LOG"))
@@ -236,8 +257,8 @@ static int decode_voice(Voice *v, int ch, ChanState *cs, int16_t *out, int need)
                     out[y + n] = pcm[s * v->chans + ch];
                 }
             } else if (v->fmt == 6 && coefs) {
-                SwapChan *sw = swap_for(v);
-                int64_t base = sw ? swap_base(sw, wb) : -1;
+                int64_t base;
+                SwapChan *sw = swap_for(v, wb, &base);
                 for (; n < want; n++) out[y + n] = adpcm_next(data, wb->size, start + cs->offset + n, coefs, cs);
                 if (base >= 0) {  // (the other stream's sound at the same position, cross-faded)
                     int64_t at = base + start + cs->offset;
@@ -283,6 +304,7 @@ static int voice_prepare(Renderer *r, Voice *v) {
     int nch = v->chans > 6 ? 6 : v->chans;
     if (v->is_new) {
         for (int c = 0; c < nch; c++) memset(&r->chst[v->chan_ids[c] % r->voices], 0, sizeof(ChanState));
+        if (g_nswap) swap_voice_new(v);
         v->prev_volume = v->volume;
         v->is_new = 0;
     }

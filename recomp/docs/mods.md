@@ -863,7 +863,9 @@ which stay on, don't block); a background tap needs 20 frames since the last; SM
 background taps (the 30th gives one if chance gave none). Spawned enemies can defeat the title course's Mario; the
 course then starts again without them (SMM1 too). Leaving the title (Make, Coursebot, Course World, Story Mode) while
 a letter plays, the rocket is up, the parakeet sits or K is on puts everything back: the logo, the colours, the music;
-the spawned actors go with the title course.
+the letters' sounds still playing or still to come (the rocket's) stop; the spawned actors go with the title course.
+Turning the switch off on the title does the same at once, and a Mystery Mushroom gives Wario only while the letters
+are on and the title shows (elsewhere it is the costumes mod's usual draw).
 
 **What differs from SMM1:**
 - The parakeet: SMM1's recorded the GamePad's microphone and played it back changed. No microphone is used here: it
@@ -893,7 +895,9 @@ Research (private): `research/specs/smm1-title-letters.md`, `research/specs/smm2
 
 **Tests.** `RECOMP_TITLE_LETTERS_LOG=1` logs the panes' boxes, spawns, defeats and clears (`[title] ...`; taps,
 sounds and the dump are logged anyway). `RECOMP_TITLE_LETTERS_SPAWN=<kind>[:<vx>:<vy>],...` makes background taps
-spawn those kinds in turn; `RECOMP_TITLE_LETTERS_DO=defeat@<n>,clear@<n>` defeats / clears at title frame n. Taps by
+spawn those kinds in turn; `RECOMP_TITLE_LETTERS_DO=defeat@<n>,clear@<n>,off@<n>` defeats / clears / turns the
+switch off (as the Mods tab) at title frame n. `LARECOMP_SMM1_SE_LOG=1` logs when a delayed SMM1 sound starts and
+which are stopped; `LARECOMP_AUDIO_SWAP_LOG=1` the 8-bit music's buffers and its fade reset at a voice's start. Taps by
 `LARECOMP_HOST_INPUT` (`<frame>:tap:<x>/<y>:<frames>`); a title course is forced with a mod folder holding ten copies
 of one course (`RECOMP_MOD_DIR`). `tools/test_smm1ui --title-letter <LETTER> ...` renders a letter's animation
 without the game; `make test-title-letters` checks the hit-testing.

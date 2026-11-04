@@ -67,6 +67,7 @@ void smm1_se_bank(const char *bank);
 bool smm1_se(const char *name);
 bool smm1_se_has(const char *name);
 extern uint64_t renderer_present_count(void);
+bool title_letters_active(void);  // (mods/title_letters: the SMM1 title's M gives Wario only while on the title)
 
 #define NAME_TABLE MAIN_ADDR(0x2c17638)   // model base names: SafeString {vtable, char *} [style * 16 + form]
 #define STYLE_PTR MAIN_ADDR(0x2c57d58)    // *(*(this + 0x30) + 0x1c): the course's style (0 SMB1)
@@ -625,7 +626,8 @@ bool costume_after(Cpu *c, uint64_t addr) {
         }
         Wearer *w = &g_p[i];
         if (w->player != player) return true;
-        const char *res = g_giving ? g_giving : g_pickup[0] ? g_pickup : draw(w->wear[0] ? w->wear : NULL);
+        const char *pick = g_pickup[0] && title_letters_active() ? g_pickup : NULL;  // (off the title: a draw)
+        const char *res = g_giving ? g_giving : pick ? pick : draw(w->wear[0] ? w->wear : NULL);
         g_giving = NULL;
         if (!res) return true;  // (no costume owned yet: the item stays the game's)
         s32(target, 0);  // (a change to small: from small nothing to see, from Super / Fire the shrink)

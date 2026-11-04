@@ -528,7 +528,7 @@ static const char *builtin_src(const char *name, int *stage) {
     return NULL;
 }
 
-VkShaderModule vk_builtin_shader(const char *name) {
+VkShaderModule vk_builtin_shader_try(const char *name) {
     static struct { char name[32]; VkShaderModule m; } cache[64];
     static int n;
     for (int i = 0; i < n; i++) if (!strcmp(cache[i].name, name)) return cache[i].m;
@@ -536,7 +536,12 @@ VkShaderModule vk_builtin_shader(const char *name) {
     const char *src = builtin_src(name, &stage);
     if (!src) FATAL("no built-in shader %s\n", name);
     VkShaderModule m = vk_compile_glsl(src, stage, name);
+    if (n < 64) { snprintf(cache[n].name, sizeof cache[n].name, "%s", name); cache[n++].m = m; }  // (a failure too)
+    return m;
+}
+
+VkShaderModule vk_builtin_shader(const char *name) {
+    VkShaderModule m = vk_builtin_shader_try(name);
     if (!m) FATAL("built-in shader %s failed to compile\n", name);
-    if (n < 64) { snprintf(cache[n].name, sizeof cache[n].name, "%s", name); cache[n++].m = m; }
     return m;
 }

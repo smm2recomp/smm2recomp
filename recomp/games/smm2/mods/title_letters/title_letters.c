@@ -88,6 +88,7 @@ static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_seen;          // presented frame of the last state call (0: none)
 static _Atomic bool g_on_title;
 static _Atomic int g_data;               // the SMM1 dump: 0 not opened yet, 1 open, -1 none
+static struct { uint64_t page, last; } g_leave;  // (the game thread) the page just left and its last state call
 
 static int now_tick(void) {  // (60 Hz, both threads: the renderers may present more frames than the game runs)
     struct timespec t;
@@ -97,7 +98,7 @@ static int now_tick(void) {  // (60 Hz, both threads: the renderers may present 
 
 bool title_letters_active(void) {
     uint64_t seen = g_seen;
-    return g_on_title && seen && renderer_present_count() - seen < GONE_AFTER;
+    return g_on_title && seen && renderer_present_count() - seen < GONE_AFTER && smm1_title_letters();
 }
 
 bool title_letters_box(int letter, TlBox *out) {
@@ -139,6 +140,7 @@ static void forget(void) {  // (no pane is touched: they may be gone)
 
 void title_letters_reset(void) {
     if (!g_on_title) return;
+    g_leave.page = T.page, g_leave.last = renderer_present_count();  // (its states may run on through the fade-out)
     for (int i = 0; i < TL_COUNT; i++) title_letters_hide(i, false);
     forget();
     LOG("[title] letters off: left the title\n");
@@ -266,9 +268,24 @@ static void follow_touch(int state) {
 
 // once per title frame, after the game's own state function
 static void title_frame(Cpu *c, uint64_t owner, int state) {
-    if (!smm1_title_letters() || !on_heap(owner)) return;
+    if (!on_heap(owner)) return;
     uint64_t page = g64(owner + OWNER_PAGE), now = renderer_present_count(), seen = g_seen;
     if (!on_heap(page)) return;
+    if (!smm1_title_letters()) {  // (switched off in the Mods tab: SMM2's letters back, the effects and sounds off)
+        if (!g_on_title) return;
+        if (page == T.page)
+            for (int i = 0; i < TL_COUNT; i++) title_letters_hide(i, false);
+        forget();
+        LOG("[title] letters off: switched off\n");
+        return;
+    }
+    if (g_leave.page) {  // (left: not again on that page until it changes, Wait runs or its states rest a while)
+        if (page == g_leave.page && state != ST_WAIT && now - g_leave.last < GONE_AFTER) {
+            g_leave.last = now;
+            return;
+        }
+        g_leave.page = 0;
+    }
     if (!g_on_title || page != T.page || !seen || now - seen >= GONE_AFTER) {
         uint64_t was_hidden[TL_COUNT];  // (a state we don't follow ran a while, e.g. ToWait: the panes we hid, if
                                         // they are still the page's, are shown again)
@@ -312,6 +329,9 @@ const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq) {
     static LQuads q;
     static uint8_t *px;
     static uint64_t n;
+    static LQuad *last;         // the quads px holds (a letter held on, K's or I's, draws the same each frame)
+    static int last_n = -1, last_cap;
+    static int still;           // calls since it last changed (the renderers may present more frames than ticks)
     if (g_data != 1) return NULL;
     if (!title_letters_active()) {  // (the title went without one of our hooks noticing: K's picture and music back)
         tl_effects_lost();
@@ -323,11 +343,27 @@ const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq) {
     bool any = tl_effects_draw(tick, &q, false);  // (A's stars behind the letters, the dust over them)
     any |= tl_anim_draw(tick, &q);
     any |= tl_effects_draw(tick, &q, true);
-    if (!any) return NULL;
+    if (!any) { last_n = -1; return NULL; }
     if (!px && !(px = malloc(1280 * 720 * 4))) return NULL;
+    *w = 1280, *h = 720, *full = 0;
+    static int log = -1;
+    if (log < 0) log = getenv("RECOMP_TITLE_LETTERS_LOG") != NULL;
+    if (q.n == last_n && !memcmp(q.q, last, sizeof *q.q * (size_t)q.n)) {  // (nothing moved: no new picture, no upload)
+        if (++still == 60 && log) LOG("[title] overlay still for 60 frames: seq %llu kept\n", (unsigned long long)n);
+        *seq = 1ull << 48 | n;
+        return px;
+    }
+    if (q.n > last_cap) {
+        LQuad *m = realloc(last, sizeof *q.q * (size_t)q.n);
+        if (m) last = m, last_cap = q.n;
+    }
+    last_n = q.n <= last_cap ? q.n : -1;
+    if (last_n >= 0) memcpy(last, q.q, sizeof *q.q * (size_t)q.n);
+    if (still >= 60 && log) LOG("[title] overlay moves again: seq %llu\n", (unsigned long long)n + 1);
+    still = 0;
     memset(px, 0, 1280 * 720 * 4);
     lyt_raster(&q, px, 1280, 720, 1280, 720);
-    *w = 1280, *h = 720, *full = 0, *seq = 1ull << 48 | ++n;  // (its own numbers: the renderer uploads on a change)
+    *seq = 1ull << 48 | ++n;  // (its own numbers: the renderer uploads on a change)
     return px;
 }
 
