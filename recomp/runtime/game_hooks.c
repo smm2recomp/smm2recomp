@@ -17,7 +17,7 @@
 // ---- frame / level (renderers): the current level's name, for logs and per-level render-target resets
 WEAK const char *game_level_name(void) { return ""; }
 WEAK void romfs_file_read_hook(const char *path) { (void)path; }
-// a folder of files a game's mods generate, laid over the RomFS when no RECOMP_MOD_DIR is set (runtime/services/fs.c)
+// folders of files a game's mods generate, laid over the RomFS (and over RECOMP_MOD_DIR's: runtime/mods.c)
 WEAK const char *game_romfs_overlay(void) { return NULL; }
 WEAK int game_gamebanana_id(void) { return 0; }  // (runtime/gamebanana.h: none, no GameBanana list)
 // The game is showing an error (runtime/services/am.c): a game's mod may say what it means for the player instead

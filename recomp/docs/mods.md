@@ -1094,12 +1094,11 @@ A Mods-tab switch, "Mystery Mushroom costumes", off by default (`costumes=0/1` i
 - **Tests:** `RECOMP_COSTUME=<res>` wears that costume from each course's start (and every pickup gives it);
   `RECOMP_COSTUME_TRY=<frame>:<res>` presses "Mystery Mushroom costume now" at that presented frame;
   `RECOMP_COSTUME_DEBUG=1` logs forms, model textures, looks and every sound. `tools/costume_course.py` makes a test
-  course as the title courses (`RECOMP_MOD_DIR`, `SMM2_SEED=1`; link the mod folder's `romfs/Pack/M1_Model.pack` and
-  `romfs/Mods/CostumeAppeal.bin` to the ones in `mods-generated/romfs/`): pens with a Super Mushroom, two Mystery
-  Mushrooms and a Koopa, and its pad script (`--variant hit`: a Koopa walking to a player in costume who taunts first;
-  `--variant subarea`: a warp pipe in each area, walked into, out of and into again). With `RECOMP_MOD_DIR` the
-  romfs index is made at start, before the overlay is generated (lazily, at the first costume model), so after a
-  change to the generated pack the links show the previous start's: start once more.
+  course as the title courses (`RECOMP_MOD_DIR`, `SMM2_SEED=1`; the generated files are laid over the mod folder's,
+  so no links are needed): pens with a Super Mushroom, two Mystery Mushrooms and a Koopa, and its pad script
+  (`--variant hit`: a Koopa walking to a player in costume who taunts first; `--variant subarea`: a warp pipe in each
+  area, walked into, out of and into again). Until 2026-11-04 `RECOMP_MOD_DIR` left the generated overlay out, so an
+  SMB1 course with costumes on crashed in the model builder (slot 12's `Player_Chara_<res>` not in the RomFS).
   Checked (2026-10-22, later): SMM2's jump sound muted under Peach's (`LARECOMP_AUDIO_LOG=1`: SMB1's jump wave, 0x341a
   bytes, 5 times in 5 jumps with costumes off, 0 in Peach, 5 in Goomba), the costume through the sub-area pipe and
   back, the "?" item with the Big and the Super Mushroom as the Mystery Mushroom.
@@ -1142,10 +1141,10 @@ It takes effect at the next start: the Slim Mario models are made then from the 
   every eligible Super Mushroom weird, `RECOMP_LANKY_TRY=<frame>` presses "Lanky Mario now" at that frame,
   `RECOMP_LANKY_DEBUG=1` logs the jumps (vy and peak height), mushrooms, forms and sounds. An SMB1 title course
   with ? blocks (`RECOMP_MOD_DIR` with `romfs/Course/title_course_data_0N.szs`, `SMM2_SEED=1`) is playable on the
-  title screen; with `RECOMP_MOD_DIR` the generated overlay isn't served, so link `romfs/Pack/M1_Model.pack` to the
-  one in `mods-generated/romfs/`. Measured (2026-10-22): a standing lanky jump leaves at vy 4.128 (3.628 + 0.5);
-  held 45 frames it peaks at 96.8 px (Super Mario: 64.0 held 40 frames), a 2-frame tap at 25.7 px (19.9); h_fuyu
-  plays 18 frames into a held jump and not on a tap; a Koopa's hit makes a lanky Mario small.
+  title screen (the generated overlay is served over the mod folder). Measured (2026-10-22): a standing lanky jump
+  leaves at vy 4.128 (3.628 + 0.5); held 45 frames it peaks at 96.8 px (Super Mario: 64.0 held 40 frames), a 2-frame
+  tap at 25.7 px (19.9); h_fuyu plays 18 frames into a held jump and not on a tap; a Koopa's hit makes a lanky Mario
+  small.
 
 ## Try it now: mod effects on demand (`games/smm2/mods/triggers.c`)
 

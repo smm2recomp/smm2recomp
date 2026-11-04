@@ -292,7 +292,7 @@ On the title screen the course is playable straight away; L + R (Q + E) opens th
 Useful environment variables (inherited from LAS Recomp): `LARECOMP_WINDOW_SHOT=<frame>` saves the window at
 that frame (`LARECOMP_SHOT_PATH=<png>`, `LARECOMP_EXIT_AFTER_SHOT=1`), `LARECOMP_SCREENSHOT_EVERY=<n>`,
 `LARECOMP_TRACE_SVC=1`, `LARECOMP_LOG_FILES=1` (RomFS files as they are read). `RECOMP_MOD_DIR=<dir>` serves files
-from `<dir>/romfs/` over the game's.
+from `<dir>/romfs/` over the game's (in place of the player's mods; the files the mods generate still go on top).
 
 Added for SMM2:
 

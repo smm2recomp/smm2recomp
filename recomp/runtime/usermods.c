@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "mods.h"         // mods_dir: a test's mod folder takes the player's mods' place
 #include "platform.h"     // (Windows: POSIX mkdir; plat_remove_tree)
 #include "romfs_build.h"  // romfs_copy_tree
 #include "rt.h"
@@ -333,6 +334,7 @@ void usermods_identity(char *buf, size_t cap) {
     pthread_mutex_lock(&g_lock);
     ensure_scanned();
     identity_locked(buf, cap);
+    if (mods_dir()) buf[0] = 0;  // (none served: usermods_overlay)
     pthread_mutex_unlock(&g_lock);
 }
 size_t usermods_overlay(char *buf, size_t cap) {
@@ -340,7 +342,7 @@ size_t usermods_overlay(char *buf, size_t cap) {
     ensure_scanned();
     size_t l = 0;
     buf[0] = 0;
-    for (int i = 0; i < g_n; i++) {
+    for (int i = 0; i < g_n && !mods_dir(); i++) {  // (RECOMP_MOD_DIR: that folder in their place, runtime/mods.c)
         if (!g_e[i].m.enabled || !g_e[i].m.has_romfs) continue;
         int w = snprintf(buf + l, cap - l, USERMODS_DIR "/%s/romfs\n", g_e[i].m.id);
         if (w < 0 || (size_t)w >= cap - l) break;
@@ -364,7 +366,7 @@ bool usermods_find(const char *rel, char *out, size_t cap) {
     pthread_mutex_lock(&g_lock);
     ensure_scanned();
     bool found = false;
-    for (int i = g_n - 1; i >= 0 && !found; i--) {
+    for (int i = g_n - 1; i >= 0 && !found && !mods_dir(); i--) {
         if (!g_e[i].m.enabled || !g_e[i].m.has_romfs) continue;
         struct stat st;
         found = (size_t)snprintf(out, cap, USERMODS_DIR "/%s/romfs/%s", g_e[i].m.id, rel) < cap && !stat(out, &st) &&

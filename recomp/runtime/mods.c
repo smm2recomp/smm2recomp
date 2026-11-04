@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
 #include "rt.h"
@@ -12,14 +13,27 @@ const char *mods_dir(void) {
     return d && *d ? d : NULL;
 }
 
+// The overlay folders, lowest first, one per line: the active mod's romfs/, then the game's (runtime/game_hooks.c: the
+// player's mods - none with a mod folder, which takes their place - and the files a game's mods generate, which must
+// be served with it: SMM2's costume models are only there)
+static char g_overlay[16384 + 1100];
+static void overlay_once(void) {
+    extern const char *game_romfs_overlay(void);  // (a game's own: none by default)
+    const char *d = mods_dir(), *g = game_romfs_overlay();
+    snprintf(g_overlay, sizeof g_overlay, "%s%s%s%s", d ? d : "", d ? "/romfs\n" : "", g ? g : "",
+             g && *g && g[strlen(g) - 1] != '\n' ? "\n" : "");
+}
+const char *mods_overlay(void) {
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, overlay_once);
+    return g_overlay[0] ? g_overlay : NULL;
+}
+
 bool mods_romfs_override(const char *path, char *out, size_t cap) {
-    const char *d = mods_dir();
-    extern const char *game_romfs_overlay(void);  // a game's own generated files (runtime/game_hooks.c: none)
-    const char *g = d ? NULL : game_romfs_overlay();
-    if (!d && !g) return false;
+    const char *g = mods_overlay();
+    if (!g) return false;
     struct stat st;
-    if (d) return (size_t)snprintf(out, cap, "%s/romfs/%s", d, path) < cap && stat(out, &st) == 0 && S_ISREG(st.st_mode);
-    // (the game's overlay: folders, one per line, the last one winning - look from the end)
+    // (folders, one per line, the last one winning - look from the end)
     const char *end = g + strlen(g);
     while (end > g) {
         const char *start = end;

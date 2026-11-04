@@ -295,10 +295,8 @@ static bool g_rix_on;
 static void rix_open(const char *dir) {
     char why[256];
     uint64_t t0 = plat_now_ns();
-    char overlay[16384] = "";
-    extern const char *game_romfs_overlay(void);  // mods' folders, a game's generated files (runtime/game_hooks.c: none)
-    if (mods_dir()) snprintf(overlay, sizeof overlay, "%s/romfs", mods_dir());
-    else if (game_romfs_overlay()) snprintf(overlay, sizeof overlay, "%s", game_romfs_overlay());
+    char overlay[16384 + 1100] = "";  // (the mod folder's romfs/, the player's mods, a game's generated files: mods.h)
+    if (mods_overlay()) snprintf(overlay, sizeof overlay, "%s", mods_overlay());
     bool have_overlay = overlay[0] != 0;  // (folders, one per line; a missing one is skipped)
     if (!romfs_index(dir, have_overlay ? overlay : NULL, &g_rix, why, sizeof why)) FATAL("RomFS %s: %s\n", dir, why);
     g_rix_on = true;
