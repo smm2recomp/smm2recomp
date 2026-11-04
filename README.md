@@ -83,8 +83,14 @@ session's log as `smm2recomp.previous.log`: attach that one. The data folder is:
 | Linux | `~/.local/share/smm2recomp` (or `$XDG_DATA_HOME/smm2recomp`) |
 | macOS | `~/Library/Application Support/org.smcraft.smm2recomp` |
 
+On Linux, started from a terminal, the log goes to the terminal instead of `smm2recomp.log`: copy it from there.
+
 The setup screen tells you when a newer release is out and links to it; nothing is downloaded by
-itself. Android and iOS / iPadOS have no download: they're built yourself from source
+itself. To update on Windows, unpack the new release over the old folder (replace the files): your game
+files, saves and settings stay, and setup isn't repeated. On Linux and macOS they're kept outside
+the program, so any copy finds them. The game code is only rebuilt when a release changes it.
+
+Android and iOS / iPadOS have no download: they're built yourself from source
 ([recomp/README.md](recomp/README.md)); iOS needs a Mac to build, sign and install the app.
 
 ## Troubleshooting
