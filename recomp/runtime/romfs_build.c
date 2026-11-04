@@ -42,6 +42,28 @@ struct Dir {
 static int by_name_dir(const void *a, const void *b) { return strcmp((*(Dir *const *)a)->name, (*(Dir *const *)b)->name); }
 static int by_name_file(const void *a, const void *b) { return strcmp((*(File *const *)a)->name, (*(File *const *)b)->name); }
 
+// A file's size. On Windows the C runtime's stat() reports a symbolic link's own size, 0, not its target's (a RomFS
+// set up from folders is a tree of symlinks where Developer Mode allows them: every file came out empty, issue #66),
+// so a 0 there is asked of the file itself, through the link.
+static uint64_t file_size(const char *p, const struct stat *st) {
+#ifdef _WIN32
+    if (st->st_size == 0) {
+        HANDLE h = CreateFileA(p, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+        LARGE_INTEGER n;
+        uint64_t size = 0;
+        if (h != INVALID_HANDLE_VALUE) {
+            if (GetFileSizeEx(h, &n)) size = (uint64_t)n.QuadPart;
+            CloseHandle(h);
+        }
+        return size;
+    }
+#else
+    (void)p;
+#endif
+    return (uint64_t)st->st_size;
+}
+
 static Dir *scan(const char *path, const char *name, Dir *parent, int depth) {
     if (depth > 32) return NULL;
     DIR *d = opendir(path);
@@ -65,7 +87,7 @@ static Dir *scan(const char *path, const char *name, Dir *parent, int depth) {
             dir->dirs[dir->ndirs++] = c;
         } else if (S_ISREG(st.st_mode)) {
             File *f = calloc(1, sizeof *f);
-            f->name = strdup(e->d_name), f->path = p, f->size = (uint64_t)st.st_size, f->parent = dir;
+            f->name = strdup(e->d_name), f->path = p, f->size = file_size(p, &st), f->parent = dir;
             if (dir->nfiles == cf) dir->files = realloc(dir->files, sizeof *dir->files * (cf = cf ? cf * 2 : 16));
             dir->files[dir->nfiles++] = f;
         } else {
