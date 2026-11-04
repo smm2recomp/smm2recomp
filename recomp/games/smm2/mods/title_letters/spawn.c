@@ -17,6 +17,10 @@
 //
 // Called from the title's state hooks only (the game thread, between the game's state function and its return):
 // tl_spawn_frame() gives this file the guest CPU for the frame, tl_spawn_done() takes it back.
+// A letter's actor appears at the letter, as in SMM1; SMM2's logo stands over terrain in some title courses, and an
+// actor made inside terrain is gone at once (a puff, mostly behind the letter): tl_spawn_free then tries again a step
+// below, a step above, two below, ... (TRY_STEP) until one stays.
+//
 // Tests: RECOMP_TITLE_LETTERS_SPAWN=<kind>[:<vx>:<vy>],... (TlActor numbers): background taps make these in turn;
 // RECOMP_TITLE_LETTERS_DO=defeat@<n>,clear@<n>: tl_defeat_enemies / tl_clear_screen at title frame n.
 #include <stdio.h>
@@ -54,12 +58,17 @@
 #define AREA_SCENE 0x140                    // area: its scene set-up (+0x28 the theme, +0x2c 1 at night) [run:
                                             //   v1.0.0's +0x130, player-physics.md; the ten title courses' themes]
 #define MAX_TRACK 320
+#define MAX_FOES 512
+#define TRY_STEP 40.f                       // tl_spawn_free: screen px between the points it tries
+#define TRY_MAX 16
+#define STILLBORN 2                         // title frames: an actor gone this soon was made inside terrain [run]
 
 static bool on_heap(uint64_t a) { return a >= HEAP_BASE && a < HEAP_BASE + HEAP_MAX - 0x1000 && !(a & 7); }
 static float g32f(uint64_t a) { float f; uint32_t w = g32(a); memcpy(&f, &w, 4); return f; }
 static void s32f(uint64_t a, float f) { uint32_t w; memcpy(&w, &f, 4); s32(a, w); }
 
 bool costumes_on(void);  // costume.c: the Mystery Mushroom costumes mod is on
+int costume_item_form(void);  // costume.c: 6 the Big Mushroom is the Mystery Mushroom, 1 the Super Mushroom
 
 // ---- the kinds: v3.0.3 actor ids per style (SMB1, SMB3, SMW, NSMBU, 3D World; -1: the style has none), SMM1's
 // count (A enemy-type, B item, C coin) and the course-object flags beyond the default 0x06000040 (0x4 alternate)
@@ -75,14 +84,20 @@ static const Kind kinds[TA_COUNT] = {
     [TA_SPINY_SHELL] = {"Spiny Shell", 'A', {138, 138, 138, 138, 138}, 0x4},  // (Togezo, alternate)
     [TA_SHOE] = {"Goomba's Shoe", 'B', {252, 252, -1, -1, -1}, 0},  // (Shoes: the empty shoe)
     [TA_YOSHI_EGG] = {"Yoshi's Egg", 'A', {-1, -1, 267, 267, -1}, 0},  // (YoshiEgg)
-    [TA_MYSTERY_MUSHROOM] = {"Mystery Mushroom", 'B', {253, -1, -1, -1, -1}, 0},  // (BigKinoko: the costumes mod's)
+    [TA_MYSTERY_MUSHROOM] = {"Mystery Mushroom", 'B', {253, -1, -1, -1, -1}, 0},  // (BigKinoko: the costumes mod's;
+                                                                                    //   SuperKinoko 242 when its item
+                                                                                    //   is the Super Mushroom)
     [TA_STAR] = {"Super Star", 'B', {244, 244, 244, 244, 244}, 0},  // (SuperStar)
 };
 const char *tl_actor_name(int actor) { return actor >= 0 && actor < TA_COUNT ? kinds[actor].name : "?"; }
 
 static Cpu *g_cpu;   // this frame's guest CPU (tl_spawn_frame), NULL outside the title's hooks
 static int g_log = -1;
-static struct { uint64_t actor, serial; int kind; } g_track[MAX_TRACK];  // the actors made here, while alive
+typedef struct { float sx, sy, vx, vy; int tries; } Try;  // tl_spawn_free: where it asked, the points tried
+static struct { uint64_t actor, serial; int kind; uint64_t born; Try free; } g_track[MAX_TRACK];  // the actors made
+                                                                                                  //   here, alive
+static struct { uint64_t actor, serial; } g_foes[MAX_FOES];  // tl_defeat_begin's enemies
+static int g_nfoes, g_foe_next;
 static int g_ntrack;
 static uint64_t g_frame, g_last_tap;  // title frames; the last background tap that spawned
 static int g_taps, g_bowser_cycle;    // background taps in this cycle of 30; a Bowser came in it
@@ -205,12 +220,13 @@ static int alive_of(int kind) {
     return n;
 }
 
-bool tl_spawn(int actor, float sx, float sy, float vx, float vy) {
+static bool spawn(int actor, float sx, float sy, float vx, float vy, const Try *free) {
     int style = tl_game_style();
     float l, b, r, t;
     if (actor < 0 || actor >= TA_COUNT || style < 0 || !g_cpu || !view(&l, &b, &r, &t)) return false;
     const Kind *k = &kinds[actor];
     int id = k->id[style];
+    if (actor == TA_MYSTERY_MUSHROOM && id >= 0 && costume_item_form() == 1) id = 242;
     const char *why = NULL;
     if (id < 0) why = "this style has none";
     else if (actor == TA_MYSTERY_MUSHROOM && !costumes_on()) why = "the Mystery Mushroom costumes mod is off";
@@ -225,8 +241,26 @@ bool tl_spawn(int actor, float sx, float sy, float vx, float vy) {
     if (why) return false;
     if (vx != 0 || vy != 0) s32f(a + A_POS + 0xc, vx), s32f(a + A_POS + 0x10, vy);
     g_track[g_ntrack].actor = a, g_track[g_ntrack].serial = g64(a + A_SERIAL), g_track[g_ntrack].kind = actor;
+    g_track[g_ntrack].born = g_frame;
+    g_track[g_ntrack].free = free ? *free : (Try){0};
     g_ntrack++;
     return true;
+}
+
+bool tl_spawn(int actor, float sx, float sy, float vx, float vy) { return spawn(actor, sx, sy, vx, vy, NULL); }
+
+bool tl_spawn_free(int actor, float sx, float sy, float vx, float vy) {
+    Try t = {sx, sy, vx, vy, 1};
+    return spawn(actor, sx, sy, vx, vy, &t);
+}
+
+// the next point to try after t->tries points: a step below the first, a step above, two below, ... within the view
+static bool next_point(Try *t, float *sx, float *sy) {
+    for (int k = t->tries; k < TRY_MAX; k++) {
+        float y = t->sy + TRY_STEP * (float)((k + 1) / 2) * (k & 1 ? 1 : -1);
+        if (y >= 24 && y <= 696) { *sx = t->sx, *sy = y, t->tries = k + 1; return true; }
+    }
+    return false;
 }
 
 // ---- the background tap
@@ -273,25 +307,51 @@ static int screen_actors(uint64_t *out, int max) {
     return m;
 }
 
-void tl_defeat_enemies(void) {
+static void defeat(uint64_t a) {
     Cpu *c = g_cpu, save;
-    uint64_t act[512], p = player1();
-    int n = c ? screen_actors(act, 512) : 0, done = 0;
-    for (int i = 0; i < n; i++) {
-        uint64_t a = act[i];
-        if (profile_kind(a) != 1 || !enemy_base(a)) continue;
-        float x = g32f(a + A_POS), y = g32f(a + A_POS + 4);
-        guest_save(c, &save);
-        uint64_t at = c->sp;
-        s32f(at, x), s32f(at + 4, y);
-        c->x[0] = a, c->x[1] = ATTACK_STAR, c->x[2] = 0;
-        c->x[3] = p && g32f(p + A_POS) > x;  // (the hit's side: away from Mario)
-        c->x[4] = at, c->x[5] = 0;
-        guest_call(c, ENEMY_ATTACKED);
-        guest_restore(c, &save);
-        done++;
+    uint64_t p = player1();
+    float x = g32f(a + A_POS), y = g32f(a + A_POS + 4);
+    guest_save(c, &save);
+    uint64_t at = c->sp;
+    s32f(at, x), s32f(at + 4, y);
+    c->x[0] = a, c->x[1] = ATTACK_STAR, c->x[2] = 0;
+    c->x[3] = p && g32f(p + A_POS) > x;  // (the hit's side: away from Mario)
+    c->x[4] = at, c->x[5] = 0;
+    guest_call(c, ENEMY_ATTACKED);
+    guest_restore(c, &save);
+}
+
+int tl_defeat_begin(void) {
+    uint64_t act[MAX_FOES];
+    int n = g_cpu ? screen_actors(act, MAX_FOES) : 0;
+    g_nfoes = g_foe_next = 0;
+    for (int i = 0; i < n; i++)
+        if (profile_kind(act[i]) == 1 && enemy_base(act[i]))
+            g_foes[g_nfoes].actor = act[i], g_foes[g_nfoes++].serial = g64(act[i] + A_SERIAL);
+    if (g_log) LOG("[title] defeat: %d enemies of %d actors on screen\n", g_nfoes, n);
+    return g_nfoes;
+}
+
+int tl_defeat_some(int most) {
+    if (!g_cpu || g_foe_next >= g_nfoes) return 0;
+    uint64_t live[1024];
+    int nlive = live_actors(player_area(), live, 1024), done = 0;
+    while (g_foe_next < g_nfoes && done < most) {
+        uint64_t a = g_foes[g_foe_next].actor, serial = g_foes[g_foe_next++].serial;
+        bool alive = !g8(a + A_PARKED) && g64(a + A_SERIAL) == serial, found = false;
+        for (int k = 0; alive && k < nlive; k++)
+            if (live[k] == a) { defeat(a), done++, found = true; break; }
+        if (g_log && !found) LOG("[title] defeat: %#llx gone already\n", (unsigned long long)a);
     }
-    if (g_log) LOG("[title] defeat: %d of %d actors on screen\n", done, n);
+    return done;
+}
+
+int tl_defeat_left(void) { return g_nfoes - g_foe_next; }
+
+void tl_defeat_enemies(void) {
+    tl_defeat_begin();
+    int done = tl_defeat_some(MAX_FOES);
+    if (g_log) LOG("[title] defeat: %d defeated\n", done);
 }
 
 void tl_clear_screen(void) {
@@ -333,14 +393,26 @@ void tl_spawn_frame(struct Cpu *c) {
     if (!g_ntrack) return;
     uint64_t live[1024];
     int nlive = live_actors(player_area(), live, 1024), kept = 0;
-    for (int i = 0; i < g_ntrack; i++)
-        if (tracked_alive(i, live, nlive)) g_track[kept++] = g_track[i];
-        else if (g_log) LOG("[title] %s gone\n", kinds[g_track[i].kind].name);
+    Try again[8];
+    int kinds_again[8], nagain = 0;
+    for (int i = 0; i < g_ntrack; i++) {
+        if (tracked_alive(i, live, nlive)) { g_track[kept++] = g_track[i]; continue; }
+        bool stillborn = g_frame - g_track[i].born <= STILLBORN;
+        if (g_log) LOG("[title] %s gone%s\n", kinds[g_track[i].kind].name, stillborn ? " at once (in terrain?)" : "");
+        if (stillborn && g_track[i].free.tries && nagain < 8)
+            again[nagain] = g_track[i].free, kinds_again[nagain++] = g_track[i].kind;
+    }
     g_ntrack = kept;
+    for (int i = 0; i < nagain; i++) {  // (tl_spawn_free's actor was made inside terrain: the next point)
+        float sx, sy;
+        Try *t = &again[i];
+        if (next_point(t, &sx, &sy)) spawn(kinds_again[i], sx, sy, t->vx, t->vy, t);
+        else if (g_log) LOG("[title] %s: no point left to try\n", kinds[kinds_again[i]].name);
+    }
 }
 
 void tl_spawn_done(void) { g_cpu = NULL; }
 
 void tl_spawn_reset(void) {  // (the actors go with the title course)
-    g_ntrack = 0, g_last_tap = 0, g_taps = 0, g_bowser_cycle = 0;
+    g_ntrack = 0, g_nfoes = g_foe_next = 0, g_last_tap = 0, g_taps = 0, g_bowser_cycle = 0;
 }

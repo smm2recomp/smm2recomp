@@ -5,7 +5,7 @@
 //   its effect system, whose effects aren't read here: these are our own sprites, made in code).
 // - K's sepia picture (the renderers' colour filter, with SMM1's sepia filter values) and SMM2's own 8-bit title music
 //   (BGM_Title_FC, played by the voices that play the title music, at their position: runtime/services/audio.c).
-// - The parakeet's stay on the I; SUPER's five Super Stars (actors on the title course: spawn.c).
+// - The parakeet's stay on the I. (The letters' actors on the title course: letters.c.)
 //
 // Research: research/specs/smm1-title-letters.md (private): the sounds, volumes, pitches and delays per letter, the
 // title page's drag, K's filter, the parakeet. SMM1's parakeet recorded the GamePad's microphone and played it back;
@@ -345,11 +345,6 @@ void tl_effect_decide(int letter, bool on, const TlBox *box, int tick) {
         play(&SUPER_CLICK[0], 0, false);
         play(pick(SUPER_VOICE, N(SUPER_VOICE), &S.last_super), 0, false);
         play(&SUPER_CLICK[1], 0, false);
-        // five Super Stars from the letter (SMM1 makes five Star actors there, each with its own number)
-        static const float vx[5] = {-2, -1, 0, 1, 2};
-        int made = 0;
-        for (int i = 0; i < 5; i++) made += tl_spawn(TA_STAR, box->x + box->w / 2, box->y + box->h / 2, vx[i], 1.5f);
-        LOG("[title] SUPER: %d of 5 Super Stars\n", made);
         break;
     }
     case TL_M1:

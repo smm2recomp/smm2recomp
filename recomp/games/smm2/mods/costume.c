@@ -42,6 +42,8 @@
 //     with the costume chosen in its row (any costume: it is not added to the owned ones), through the game's own
 //     form change request as a pickup. Greyed out outside an SMB1 course being played, in Endless / 100 Mario runs (they
 //     keep records) and with a power-up the Mystery Mushroom doesn't take (anything but small, Super and Fire).
+//   - The SMM1 title letters' M (title_letters/letters.c): on the title, its Mystery Mushroom gives Wario's costume
+//     (costume_pickup_gives), as SMM1's title M did.
 // Settings: costumes=1 in smm2mods.ini (or RECOMP_MOD_COSTUMES=1) turns it on (models generated at the next start);
 // costume_item=big|super. Tests: RECOMP_COSTUME=<res> wears that costume from each course's start and gives it at each
 // pickup; RECOMP_COSTUME_TRY=<frame>:<res> presses "Mystery Mushroom costume now" with that costume at that presented
@@ -363,6 +365,8 @@ typedef struct {
 } Wearer;
 static Wearer g_p[4];
 static const char *g_giving;  // a costume the next form request gives (the trigger's), NULL: a pickup's draw
+static char g_pickup[48];     // the costume every pickup gives instead of a draw (the SMM1 title's M: Wario), "" none
+void costume_pickup_gives(const char *res) { snprintf(g_pickup, sizeof g_pickup, "%s", res ? res : ""); }
 
 static int player_index(uint64_t player) {
     uint64_t pm = g64(PLAYERS);
@@ -621,7 +625,7 @@ bool costume_after(Cpu *c, uint64_t addr) {
         }
         Wearer *w = &g_p[i];
         if (w->player != player) return true;
-        const char *res = g_giving ? g_giving : draw(w->wear[0] ? w->wear : NULL);
+        const char *res = g_giving ? g_giving : g_pickup[0] ? g_pickup : draw(w->wear[0] ? w->wear : NULL);
         g_giving = NULL;
         if (!res) return true;  // (no costume owned yet: the item stays the game's)
         s32(target, 0);  // (a change to small: from small nothing to see, from Super / Fire the shrink)

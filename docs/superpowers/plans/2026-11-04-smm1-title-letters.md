@@ -301,13 +301,38 @@ test the Mystery Mushroom with `SMM2_SEED=1` (an SMB1 title course).
 **Interfaces:**
 - Consumes: Tasks 3–5.
 
-- [ ] **Step 1: Wire every letter** as the table at the top of this plan, corrected by Task 1's spec. Wario's
+- [x] **Step 1: Wire every letter** as the table at the top of this plan, corrected by Task 1's spec. Wario's
   Mystery Mushroom uses the Mystery Mushroom costumes mod's item when that mod is on, else the M's animation and
   taunt only.
-- [ ] **Step 2: Full in-game pass**: every letter, the background tap and the drag, in each title course style,
+- [x] **Step 2: Full in-game pass**: every letter, the background tap and the drag, in each title course style,
   with screenshots at the moments Task 1 names; leave the title mid-effect for A2 (rocket), K, I. Expected: matches
   the spec; nothing left behind after leaving.
-- [ ] **Step 3: Gate and commit**.
+- [x] **Step 3: Gate and commit**.
+
+**Task 6 outcome (2026-11-04):** `letters.c` holds the table: SUPER five Super Stars (as before, now here); M the
+costumes mod's Mystery Mushroom in SMB1 only, whose pickup gives Wario (`costume_pickup_gives`, costume.c; the Super
+Mushroom id when `costume_item=super`); A collects the on-screen enemies at the tap, defeats n/32 + 1 a frame from
+frame 18 and the rest when its animation ends (SMM1's 0x020a1314 / 0x020a0dd4); R one coin per tap at its layout's
+`N_Pos_00` (SMM1 spawns once per decided letter: SUPER's five stars and O's one Clown Car show "decided" is a one-frame
+signal, so the wiki's "shower" is a coin a tap; ours pops up, as from a blaster); O Clown Car; M2 Spiny 1 in 10 else
+Buzzy; A2 `tl_clear_screen` when its 380-frame animation ends; E Trampoline; R2 Shoe (SMB1 / SMB3) or Egg (SMW /
+NSMBU) at its `N_Pos_00`. Settled from SMM1's code: its title page sits in cDecideActionBtn until the letter's
+animation ends and takes no letter, background tap or drag meanwhile, so `tl_anim_deciding` now blocks new touches
+while any Decide / DecideA / DecideB plays (toggles held on don't block). Layouts are preloaded on the renderers'
+thread (`tl_anim_preload`) so R's leg tip is known at the first tap. Terrain: `tl_spawn_free` notices an actor gone
+within 2 frames and tries 40 px lower, higher, ... (R's coin and R2's Shoe / Egg land in the ceiling of the SMB1
+underground and NSMBU courses and succeed one step lower). Runs (`/Volumes/SSD/smm-work/tl-dev/t6/`, shots in
+`shots/`, sheets `c2_a.png`, `c1_a.png`, `c1_b.png`, `c348.png`, `ta.png`, `lv.png`, `mm3.png`): every letter +
+background + A + A2 in SMB1 sky (c1), SMB1 underground (c2), NSMBU underwater (c3: Junior Clown Car, Egg hatching
+Yoshi, water sounds), 3D World (c4: O / M2 Buzzy / R2 log "this style has none"), SMB3 (c5), SMW (c8: Egg, Galoomba);
+`ta.log` A's defeats one a frame from frame 18, the stars after; A2's clear at the rocket's end in every style; M2 tap
+during A2 "ignored". Wario: `mm3.log` "player 0 wears Wario" (seed 1, costumes on; M's own mushroom stays in the
+logo's pocket in that course, so a test spawn near Mario was taken). Leaving mid-effect (`lv.log`, K on, parakeet,
+A2's rocket up, then Make): "K off", "letters off", no clear afterwards, the editor clean (`lv_after2.png`); SMM2's
+Make worked under the mod. Rapid (`rp.log`): 30 SUPER taps 10 frames apart give 5 (one per animation), 40 background
+taps 5 frames apart give 10 ("too soon" 30), letters during M ignored. Switch off (`off.log`): no `[title]` line.
+Changed files cross-compile with zig for Windows / Linux (`cross1.log`). Two title courses (SMB1 underground, 3D World
+ghost house) frame the logo in a closed pocket: the letters' actors stay in it.
 
 ### Task 7: Documentation and shipping
 

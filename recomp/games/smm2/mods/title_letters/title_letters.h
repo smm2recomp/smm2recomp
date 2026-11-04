@@ -2,7 +2,7 @@
 // on SMM1's title screen when tapped or clicked. Letters map by letter to SMM2's logo panes (P_Super_00, P_LogoM_00
 // ...); SMM2's "2" is no letter. Hooks and state: title_letters.c; hit-testing: hit.c (pure, unit-tested by
 // tools/test_title_letters.c); the SMM1 animations: anim.c; the sounds, screen effects, K's sepia and 8-bit music:
-// effects.c; actors on the title course: spawn.c.
+// effects.c; actors on the title course: spawn.c; each letter's course effect at SMM1's moments: letters.c.
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -37,9 +37,21 @@ bool tl_anim_start(int letter, int tick);      // false: ignored (the letter pla
 bool tl_anim_ready(int letter, int tick);      // a tap now would start it
 bool tl_anim_on(int letter, int tick);         // a toggle (I, K) turned on (its DecideA playing or held)
 bool tl_anim_busy(int letter, int tick);       // SMM1's letter is drawn: SMM2's pane stays hidden
+bool tl_anim_deciding(int tick);               // a letter's Decide (or a toggle's DecideA / B) plays: SMM1's title
+                                               //   takes no other letter and no background touch meanwhile
+bool tl_anim_point(int letter, const TlBox *b, float *x, float *y);  // R's / R2's leg tip at rest, on the screen,
+                                               //   for SMM2's pane b (false: no such point, or not loaded yet)
+void tl_anim_preload(void);                    // (the renderers') open the next letter's layout, if any is left
 void tl_anim_box(int letter, const TlBox *b);  // where SMM2's pane is (each frame: the logo may move)
 void tl_anim_reset(void);
 bool tl_anim_draw(int tick, LQuads *out);      // (the renderers' thread) false: nothing to draw
+
+// ---- letters.c: each letter's effect on the title course, at SMM1's moments (the game thread, inside the title's
+// hooks)
+void tl_letter_decide(int letter, bool on, const TlBox *box, int tick);  // a letter's animation started: sounds
+                                                                         //   (effects.c) and its course effect
+void tl_letters_frame(int tick);              // each title frame: A's defeats, A2's clear when its rocket is back
+void tl_letters_reset(void);
 
 // ---- effects.c: sounds, screen effects, K's sepia and 8-bit music, the parakeet's stay (game thread unless said)
 void tl_effects_load(void);                   // (the SMM1 dump's thread, once it is open) the sounds, the music
@@ -61,7 +73,12 @@ struct Cpu;
 enum TlActor { TA_GOOMBA, TA_KOOPA, TA_BOWSER, TA_COIN, TA_TRAMPOLINE, TA_CLOWN_CAR, TA_BUZZY_SHELL, TA_SPINY_SHELL,
                TA_SHOE, TA_YOSHI_EGG, TA_MYSTERY_MUSHROOM, TA_STAR, TA_COUNT };
 bool tl_spawn(int actor, float screen_x, float screen_y, float vx, float vy);  // false: the style lacks it, or capped
-void tl_defeat_enemies(void);                 // every enemy on screen, as a Super Star's touch
+bool tl_spawn_free(int actor, float screen_x, float screen_y, float vx, float vy);  // the same, and if the actor is
+                                              //   gone at once (made inside terrain) again at the next point near it
+int tl_defeat_begin(void);                    // the enemies on screen now, to defeat (their number)
+int tl_defeat_some(int most);                 // up to `most` of them (those still there), as a Super Star's touch
+int tl_defeat_left(void);
+void tl_defeat_enemies(void);                 // every enemy on screen at once
 void tl_clear_screen(void);                   // every enemy, item and coin on screen vanishes in a puff
 const char *tl_actor_name(int actor);         // "Goomba" ... (logs)
 int tl_game_style(void);                      // the title course's style: 0 SMB1 .. 4 3D World, -1 none

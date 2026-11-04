@@ -126,6 +126,7 @@ void title_letters_hide(int letter, bool hidden) {
 }
 
 static void forget(void) {  // (no pane is touched: they may be gone)
+    tl_letters_reset();
     tl_anim_reset();
     tl_spawn_reset();
     tl_effects_reset();
@@ -224,7 +225,7 @@ static void letter_tapped(int letter, int32_t x, int32_t y) {
     bool plays = g_data == 1 && tl_anim_start(letter, tick);
     LOG("[title] letter %s at %d,%d%s\n", tl_letter_name[letter], x, y,
         plays ? "" : g_data == 1 ? " (still playing: no new one)" : " (no SMM1 dump: nothing to play)");
-    if (plays) tl_effect_decide(letter, tl_anim_on(letter, tick), &T.pane[letter], tick);
+    if (plays) tl_letter_decide(letter, tl_anim_on(letter, tick), &T.pane[letter], tick);
 }
 
 static void *open_dump(void *arg) {
@@ -241,6 +242,10 @@ static void follow_touch(int state) {
     int32_t x = T.x, y = T.y;
     int tick = now_tick();
     bool down = touch_first(&x, &y);
+    if (down && !T.down && ready && taps && tl_anim_deciding(tick)) {  // (SMM1's title: none while a letter plays)
+        LOG("[title] touch at %d,%d ignored: a letter plays\n", x, y);
+        taps = false, state = 0;
+    }
     if (down && !T.down) {
         T.start = taps ? tl_hit(T.box, x, y) : TL_NONE;
         T.bg = T.start == TL_NONE && background(state, x, y);  // (a tap that starts and ends on the course)
@@ -298,7 +303,7 @@ static void title_frame(Cpu *c, uint64_t owner, int state) {
     int tick = now_tick();
     for (int i = 0; i < TL_COUNT; i++)  // (SMM1's letter drawn: SMM2's hidden, whatever SMM2's animations set)
         title_letters_hide(i, tl_anim_busy(i, tick));
-    if (g_data == 1) tl_effects_frame(tick);
+    if (g_data == 1) tl_effects_frame(tick), tl_letters_frame(tick);
     tl_spawn_done();
 }
 
@@ -313,6 +318,7 @@ const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq) {
         return NULL;
     }
     q.n = 0;
+    tl_anim_preload();  // (the letters' layouts ahead of their first tap: R's leg tip is known then)
     int tick = now_tick();
     bool any = tl_effects_draw(tick, &q, false);  // (A's stars behind the letters, the dust over them)
     any |= tl_anim_draw(tick, &q);

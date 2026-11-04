@@ -24,6 +24,7 @@ static const struct { const char *layout; bool toggle; } LETTER[TL_COUNT] = {
     {"Play_TitleEBtn_00", false},     {"Play_TitleRBtn_01", false},
 };
 #define BOUNDS "B_Btn_00"  // every button layout's touch box: the letter at rest (R's pieces, M2's offset included)
+#define POINT "N_Pos_00"   // R's and R2's spawn point: where the extending leg ends (SMM1 spawns there)
 
 enum { P_IDLE, P_PLAY, P_ON, P_OFF };  // P_PLAY: Decide / DecideA; P_ON: a toggle held on; P_OFF: DecideB
 
@@ -36,6 +37,8 @@ typedef struct {
     bool tried, missing;
     int len_play, len_off;  // frames (0: not known yet)
     float gx, gy, gw, gh;   // the letter's rest rectangle in its layout (centre, size)
+    float px, py;           // its POINT pane at rest (layout space), if it has one
+    bool have_pt;
     int bound;              // the phase whose animation is bound
 } Anim;
 static Anim A[TL_COUNT];
@@ -82,6 +85,30 @@ bool tl_anim_ready(int letter, int tick) {
     return ok;
 }
 
+bool tl_anim_deciding(int tick) {
+    bool any = false;
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < TL_COUNT; i++) {
+        advance(i, tick);
+        any |= !A[i].missing && (A[i].phase == P_PLAY || A[i].phase == P_OFF);
+    }
+    pthread_mutex_unlock(&g_lock);
+    return any;
+}
+
+bool tl_anim_point(int letter, const TlBox *b, float *x, float *y) {
+    if (letter < 0 || letter >= TL_COUNT) return false;
+    pthread_mutex_lock(&g_lock);
+    const Anim *a = &A[letter];
+    bool ok = a->have_pt && a->gw > 0 && a->gh > 0;
+    if (ok) {  // (as tl_anim_draw places the layout)
+        float k = fminf(b->w / a->gw, b->h / a->gh);
+        *x = b->x + b->w / 2 + k * (a->px - a->gx), *y = b->y + b->h / 2 - k * (a->py - a->gy);
+    }
+    pthread_mutex_unlock(&g_lock);
+    return ok;
+}
+
 bool tl_anim_on(int letter, int tick) {
     if (letter < 0 || letter >= TL_COUNT) return false;
     pthread_mutex_lock(&g_lock);
@@ -121,12 +148,20 @@ static bool open_letter(int i) {
         return false;
     }
     int lp = (int)ceilf(lay_length(l, play_anim(i))), lo = LETTER[i].toggle ? (int)ceilf(lay_length(l, "DecideB")) : 1;
+    float pc[2], ps[2];
+    bool pt = lay_rect(l, POINT, pc, ps, NULL);
     pthread_mutex_lock(&g_lock);
     a->lay = l, a->gx = c[0], a->gy = c[1], a->gw = s[0], a->gh = s[1];
+    a->px = pt ? pc[0] : 0, a->py = pt ? pc[1] : 0, a->have_pt = pt;
     a->len_play = lp > 0 ? lp : 1, a->len_off = lo > 0 ? lo : 1;
     a->bound = P_IDLE;
     pthread_mutex_unlock(&g_lock);
     return true;
+}
+
+void tl_anim_preload(void) {
+    for (int i = 0; i < TL_COUNT; i++)
+        if (!A[i].tried) { open_letter(i); return; }
 }
 
 bool tl_anim_draw(int tick, LQuads *out) {
