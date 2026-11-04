@@ -206,17 +206,46 @@ touch mode, its own behaviour: a pad A right after doesn't press Make.)
   - `void tl_effects_draw(int tick, LQuads *out);`
   - `void renderer_set_sepia(bool on);` (runtime; off at the scene change)
 
-- [ ] **Step 1: Sounds**: each letter's SMM1 sounds at the times Task 1 gives; in-game test logs each `smm1_se`
+- [x] **Step 1: Sounds**: each letter's SMM1 sounds at the times Task 1 gives; in-game test logs each `smm1_se`
   call's name and result. Expected: every name found (`true`).
-- [ ] **Step 2: SUPER's five stars, A's falling stars, the drag trail**: drawn as layout quads (SMM1 effect textures
+- [x] **Step 2: SUPER's five stars, A's falling stars, the drag trail**: drawn as layout quads (SMM1 effect textures
   if Task 1 finds them, else simple sprites of our own). In-game screenshots after each.
-- [ ] **Step 3: K: sepia and 8-bit music**: `renderer_set_sepia` (a colour matrix on the final image, before the
+- [x] **Step 3: K: sepia and 8-bit music**: `renderer_set_sepia` (a colour matrix on the final image, before the
   overlay), SMM2's own `BGM_Title_FC` swapped in at the title music's position (same loop points), SMM1's Ef_Sepia
   values; K again restores both. Screenshot on / off; test leaving the
   title with sepia on (it must turn off).
-- [ ] **Step 4: I: the parakeet** lands on the I (DecideA), chirps and leaves (DecideB) on the second tap or after
+- [x] **Step 4: I: the parakeet** lands on the I (DecideA), chirps and leaves (DecideB) on the second tap or after
   SMM1's recorder time. (SMM1 recorded the GamePad's microphone; no microphone is used here.)
-- [ ] **Step 5: Gate and commit**.
+- [x] **Step 5: Gate and commit**.
+
+**Task 4 outcome (2026-11-04):** done in `effects.c` with these changes to the plan. **Sounds:** each letter's SMM1
+sound-link setup (volume, pitch, delay, stop, random groups, "random2" not repeating) from its button's own bank
+`UI_Play_Title_00_L_<X>Btn_0n`; the touch sounds (`SE_BongoCursol` / `SE_Tyoi`) are in SMM1's shared `UI_Nwk_Root`;
+TouchSelect on the finger going down, TouchCancel on sliding off; the drag's Kamek magic from `UI_Play_Title_00`.
+`smm1_audio` gained `smm1_se_ex` (volume, pitch, delay, stop, loop; a handle), `smm1_se_stop`, `smm1_se_frames`, 16
+voices. M / R2 / I use the water variants in an underwater (or night-forest) area: the theme is `*(area + 0x140) +
+0x28` in v3.0.3 (v1.0.0 +0x130), checked on all ten title courses (each has a different theme; course 3, NSMBU, is
+underwater). Every sound is logged `played` / `not found`: all found (`/Volumes/SSD/smm-work/tl-dev/t4/r1.log`,
+`r5.log`, water `r6.log`). **Screen effects:** our own sprites made in code (SMM1's ELink effects aren't read): A's
+rainbow stars fall when its animation ends, drawn under the letters' animations (over SMM2's logo, which is in the
+game image); the drag leaves twinkles and a burst on release. SUPER's five stars are SMM2 Super Star actors
+(`tl_spawn(TA_STAR)` ×5 at the letter, as SMM1's five Star actors). **K:** the runtime got a colour filter,
+`renderer_set_color_filter(m[12])` (`runtime/nvn/color_filter.c`; Metal `fs_filter`, Vulkan `present_filter.frag`
+with fragment push constants), applied as the game image is drawn, so before the overlay; the mod fades SMM1's
+Ef_Sepia (saturation 0.138, brightness 0.83, black / white 0.08 0.058 0 / 0.88 0.77 0.4588) in and out over 30
+frames. The title music: BGM_Title is four mono ADPCM voices fed pieces of the file (spec §9 of
+smm2-title-scene.md), so `audren_swap_*` (runtime/services/audio.c) makes those voices play BGM_Title_FC's PCM at the
+sample their buffer is at, cross-faded over 1 s (SMM1's 1.0); both of BGM_Title's tracks map to FC's sides (the title
+plays only the first). Proof: the captured mix correlates 0.8 with BGM_Title before / after K and 0.84 with
+BGM_Title_FC at the same stream offset while K is on (`corr_r1.txt`, `corr_r5.txt`). K on also plays SMM1's film
+noise (hiss loop, clicks every 50-100 frames). Leaving with K on (Make, `r3.log`, shots `t4l_after*.png`): "K off: the
+picture and the title music back", no swap after the fade, the editor in colour; a title that goes without our hooks
+is caught by the overlay (`tl_effects_lost`). **I:** lands with wings + chirp, sings once halfway (a stand-in for
+SMM1's playback, no microphone), leaves on a second tap or after 180 frames (SMM1's recorder time [inf]). Switch off
+(`r4.log`, `t4o_off.png`): no `[title]` line, no swap, no filter. Windows / Linux: the changed C files compile with
+zig (`cross2.log`), the GLSL with glslc. For Task 6: SMM2's logo is part of the game image, so it turns sepia too (in
+SMM1 the logo is a layout, likely not filtered); the SUPER stars fly up off the top first in the 3D World course;
+letter spawns over terrain (SMB1 underground) are destroyed, as Task 5 noted.
 
 ### Task 5: Spawning on the title course
 

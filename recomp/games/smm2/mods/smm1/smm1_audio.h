@@ -27,4 +27,10 @@ bool smm1_se(const char *name);              // a sound effect of a loaded bank,
 bool smm1_se_has(const char *name);          // ... whether a loaded bank has it (nothing played)
 void smm1_play(SPcm *p);                     // a decoded sound, once, as a sound effect (kept by the caller)
 void smm1_play_vol(SPcm *p, float vol);      // ... at this volume (1: as decoded)
+// a sound effect of a loaded bank with SMM1's sound-link settings: volume and pitch factors, a delay and a stop time
+// (60 Hz frames: it starts `delay` frames from now and is cut `stop` frames after; 0: none), looped if `loop` and its
+// wave loops. A handle for smm1_se_stop; 0: no such sound, -1: no voice free
+int smm1_se_ex(const char *name, float vol, float pitch, int delay, int stop, bool loop);
+void smm1_se_stop(int handle);
+int smm1_se_frames(const char *name);  // a loaded sound's length in 60 Hz frames (0: none)
 void smm1_game_sound(bool on);               // the game's own sound under the screens (faded)

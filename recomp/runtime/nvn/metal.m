@@ -20,6 +20,7 @@
 #import <MetalFX/MetalFX.h>
 #define HAVE_METALFX 1
 #endif
+#include "color_filter.h"
 #include "output_scale.h"
 #include "framegen.h"
 #import <QuartzCore/CAMetalLayer.h>
@@ -38,7 +39,7 @@ static id<MTLCommandQueue> queue;
 static CAMetalLayer *layer;
 static SDL_Window *window;
 static atomic_bool ui_ready;
-static id<MTLRenderPipelineState> present_pipe;
+static id<MTLRenderPipelineState> present_pipe, present_filter_pipe;  // (the colour filter's: color_filter.h)
 static id<MTLSamplerState> present_sampler;
 id<MTLBuffer> g_guest_buffer;  // the guest heap's first chunk (GPU addresses map to buffer offsets)
 uint64_t g_guest_buffer_base;
@@ -786,7 +787,12 @@ static const char *present_src =
     "  if (solid.w > 0.5) return solid;\n"  // LARECOMP_PRESENT_SOLID: draw a flat color (present-path test)
     "  return float4(t.sample(s, in.uv).rgb, 1.0); }\n"
     "fragment float4 fs_alpha(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]]) {\n"
-    "  return float4(float3(t.sample(s, in.uv).a), 1.0); }\n";
+    "  return float4(float3(t.sample(s, in.uv).a), 1.0); }\n"
+    // the colour filter (color_filter.h): a row (r, g, b, offset) per channel
+    "fragment float4 fs_filter(V in [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]],\n"
+    "                          constant float4 *m [[buffer(2)]]) {\n"
+    "  float4 c = float4(t.sample(s, in.uv).rgb, 1.0);\n"
+    "  return float4(dot(m[0], c), dot(m[1], c), dot(m[2], c), 1.0); }\n";
 
 // The guest heap as Metal buffers, one per 2 GiB chunk: this driver (NVIDIA/MetalOld) silently reads zeros from a
 // no-copy buffer larger than 2 GiB (a 3 GiB wrap gave every draw zeroed vertices, so the whole game image was black).
@@ -839,6 +845,8 @@ void backend_init(void) {
     pd.fragmentFunction = [lib newFunctionWithName:@"fs"];
     pd.colorAttachments[0].pixelFormat = layer.pixelFormat;
     present_pipe = [dev newRenderPipelineStateWithDescriptor:pd error:&err];
+    pd.fragmentFunction = [lib newFunctionWithName:@"fs_filter"];
+    present_filter_pipe = [dev newRenderPipelineStateWithDescriptor:pd error:&err];
     MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new];
     sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
     present_sampler = [dev newSamplerStateWithDescriptor:sd];
@@ -1422,6 +1430,8 @@ void backend_present(NvnTexture *t) {
         // the game image into a window-sized image (the drawable, or frame generation's): also the frame replay's
         // in-between image, by the same steps, so the two look alike
         const float cr0 = crop[0], cr1 = crop[1], cr2 = crop[2], cr3 = crop[3];  // (a block can't take the array)
+        struct { float m[12]; } cf;  // the colour filter (color_filter.h; a block takes a struct)
+        const bool cf_on = renderer_color_filter(cf.m) && present_filter_pipe;
         void (^draw_game)(id<MTLCommandBuffer>, id<MTLTexture>) = ^(id<MTLCommandBuffer> cb, id<MTLTexture> dst) {
         MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
         rp.colorAttachments[0].texture = dst;
@@ -1458,7 +1468,8 @@ void backend_present(NvnTexture *t) {
             }
             float flip = renderer_origin_lower_left() ? 1.0f : 0.0f;
             [enc setViewport:(MTLViewport){vx, vy, vw, vh, 0, 1}];
-            [enc setRenderPipelineState:present_pipe];
+            [enc setRenderPipelineState:cf_on ? present_filter_pipe : present_pipe];
+            if (cf_on) [enc setFragmentBytes:cf.m length:sizeof cf.m atIndex:2];
             float pv[8] = {flip, 0, 0, 0, cr0, cr1, cr2, cr3};
             g_shot_crop[0] = cr0, g_shot_crop[1] = cr1, g_shot_crop[2] = cr2, g_shot_crop[3] = cr3;
             [enc setVertexBytes:pv length:sizeof pv atIndex:0];

@@ -72,6 +72,26 @@ bool tl_anim_busy(int letter, int tick) {
     return busy;
 }
 
+bool tl_anim_ready(int letter, int tick) {
+    if (letter < 0 || letter >= TL_COUNT) return false;
+    pthread_mutex_lock(&g_lock);
+    Anim *a = &A[letter];
+    advance(letter, tick);
+    bool ok = !a->missing && (a->phase == P_IDLE || a->phase == P_ON);
+    pthread_mutex_unlock(&g_lock);
+    return ok;
+}
+
+bool tl_anim_on(int letter, int tick) {
+    if (letter < 0 || letter >= TL_COUNT) return false;
+    pthread_mutex_lock(&g_lock);
+    Anim *a = &A[letter];
+    advance(letter, tick);
+    bool on = LETTER[letter].toggle && (a->phase == P_PLAY || a->phase == P_ON);
+    pthread_mutex_unlock(&g_lock);
+    return on;
+}
+
 void tl_anim_box(int letter, const TlBox *box) {
     if (letter < 0 || letter >= TL_COUNT) return;
     pthread_mutex_lock(&g_lock);

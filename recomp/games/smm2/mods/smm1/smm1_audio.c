@@ -187,6 +187,9 @@ typedef struct {
     bool loop, on;
     int ch0;  // the first channel played (a multi-track stream's track: channels 2t, 2t + 1)
     float vol;  // the sound's own volume (its .bameta; a stream's also its track's) times its mix factor below
+    float pitch;      // (smm1_se_ex) a factor on the rate (0: 1)
+    int wait, left;   // (smm1_se_ex) output samples before it starts; after which it stops (0: none)
+    int id;           // (smm1_se_ex) its handle
 } Voice;
 
 // SMM1's sounds against SMM2's mix: SMM1 played them through its own engine at its own output level, which SMM2's
@@ -265,7 +268,8 @@ static bool amta_volumes(const uint8_t *d, size_t n, float *vol, float track[8])
     return true;
 }
 static pthread_mutex_t g_mx = PTHREAD_MUTEX_INITIALIZER;
-static Voice g_bgm, g_se[8];
+#define SE_VOICES 16
+static Voice g_bgm, g_se[SE_VOICES];
 static char g_bgm_name[64];
 static float g_game_gain = 1, g_game_target = 1;
 
@@ -398,7 +402,7 @@ bool smm1_se(const char *name) {
     for (int i = 0; i < g_nsfx; i++)
         if (!strcmp(g_sfx[i].name, name)) {
             pthread_mutex_lock(&g_mx);
-            for (int k = 0; k < 8; k++)
+            for (int k = 0; k < SE_VOICES; k++)
                 if (!g_se[k].on) { g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, false, true, 0, g_sfx[i].vol}; break; }
             pthread_mutex_unlock(&g_mx);
             return true;
@@ -408,17 +412,52 @@ bool smm1_se(const char *name) {
 void smm1_play_vol(SPcm *p, float vol) {
     if (!p) return;
     pthread_mutex_lock(&g_mx);
-    for (int k = 0; k < 8; k++)
+    for (int k = 0; k < SE_VOICES; k++)
         if (!g_se[k].on) { g_se[k] = (Voice){p, 0, 1, 0, false, true, 0, vol}; break; }
     pthread_mutex_unlock(&g_mx);
 }
 void smm1_play(SPcm *p) { smm1_play_vol(p, 1); }
+int smm1_se_ex(const char *name, float vol, float pitch, int delay, int stop, bool loop) {
+    static int next;
+    for (int i = 0; i < g_nsfx; i++)
+        if (!strcmp(g_sfx[i].name, name)) {
+            const SPcm *p = g_sfx[i].p;
+            int id = 0, per_frame = 48000 / 60;  // (the mixer's rate: audren's 48 kHz)
+            pthread_mutex_lock(&g_mx);
+            for (int k = 0; k < SE_VOICES; k++)
+                if (!g_se[k].on) {
+                    id = ++next > 0 ? next : (next = 1);
+                    g_se[k] = (Voice){g_sfx[i].p, 0, 1, 0, loop && p->loop, true, 0, g_sfx[i].vol * vol};
+                    g_se[k].pitch = pitch > 0 ? pitch : 1, g_se[k].id = id;
+                    g_se[k].wait = delay > 0 ? delay * per_frame : 0, g_se[k].left = stop > 0 ? stop * per_frame : 0;
+                    break;
+                }
+            pthread_mutex_unlock(&g_mx);
+            return id ? id : -1;  // (-1: found, but no voice free)
+        }
+    return 0;
+}
+int smm1_se_frames(const char *name) {
+    for (int i = 0; i < g_nsfx; i++)
+        if (!strcmp(g_sfx[i].name, name) && g_sfx[i].p->rate > 0)
+            return (int)((int64_t)g_sfx[i].p->frames * 60 / g_sfx[i].p->rate);
+    return 0;
+}
+void smm1_se_stop(int id) {
+    if (id <= 0) return;
+    pthread_mutex_lock(&g_mx);
+    for (int k = 0; k < SE_VOICES; k++)
+        if (g_se[k].on && g_se[k].id == id) g_se[k].on = false;
+    pthread_mutex_unlock(&g_mx);
+}
 
 static void mix_voice(Voice *v, float *out, int n, int rate) {
     if (!v->on || !v->p) return;
     const SPcm *p = v->p;
-    double step = (double)p->rate / rate;
+    double step = (double)p->rate / rate * (v->pitch > 0 ? v->pitch : 1);
     for (int i = 0; i < n; i++) {
+        if (v->wait > 0) { v->wait--; continue; }
+        if (v->left > 0 && --v->left == 0) { v->on = false; return; }
         int k = (int)v->pos;
         if (k >= p->frames - 1) {
             if (v->loop && p->loop_start < p->frames - 1) v->pos = p->loop_start + (v->pos - k), k = (int)v->pos;
@@ -445,6 +484,6 @@ void game_audio_mix(float *stereo, int n, int rate) {
             stereo[2 * i] *= g_game_gain, stereo[2 * i + 1] *= g_game_gain;
         }
     mix_voice(&g_bgm, stereo, n, rate);
-    for (int k = 0; k < 8; k++) mix_voice(&g_se[k], stereo, n, rate);
+    for (int k = 0; k < SE_VOICES; k++) mix_voice(&g_se[k], stereo, n, rate);
     pthread_mutex_unlock(&g_mx);
 }

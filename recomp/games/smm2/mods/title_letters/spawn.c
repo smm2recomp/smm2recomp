@@ -51,6 +51,8 @@
 #define AREA_LIVE 0x118                     // area: its actors, a list {prev, next} at +0x118, count +0x128, the
                                             //   link's offset in an actor +0x12c [bin 0x7100d642e0] (+0x48: those
                                             //   made this frame)
+#define AREA_SCENE 0x140                    // area: its scene set-up (+0x28 the theme, +0x2c 1 at night) [run:
+                                            //   v1.0.0's +0x130, player-physics.md; the ten title courses' themes]
 #define MAX_TRACK 320
 
 static bool on_heap(uint64_t a) { return a >= HEAP_BASE && a < HEAP_BASE + HEAP_MAX - 0x1000 && !(a & 7); }
@@ -107,6 +109,14 @@ static uint64_t player1(void) {
 static uint64_t player_area(void) {
     uint64_t p = player1(), a = p ? g64(p + A_AREA) : 0;
     return on_heap(a) ? a : 0;
+}
+
+int tl_course_theme(bool *night) {
+    uint64_t a = player_area(), s = a ? g64(a + AREA_SCENE) : 0;
+    if (!on_heap(s)) return -1;
+    uint32_t t = g32(s + 0x28);
+    if (night) *night = g32(s + 0x2c) == 1;
+    return t <= 9 ? (int)t : -1;
 }
 
 static bool view(float *l, float *b, float *r, float *t) {

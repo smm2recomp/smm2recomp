@@ -320,6 +320,18 @@ static const char *builtin_src(const char *name, int *stage) {
                "layout(location = 0) out vec4 o;\n"
                "void main() { o = vec4(texture(t, uv).rgb, 1.0); }\n";
     }
+    if (!strcmp(name, "present_filter.frag")) {  // (the colour filter: color_filter.h, a row per channel)
+        *stage = STAGE_FRAGMENT;
+        return "#version 450\n"
+               "layout(set = 0, binding = 0) uniform sampler2D t;\n"
+               "layout(push_constant) uniform P { layout(offset = 32) vec4 r; vec4 g; vec4 b; } pc;\n"
+               "layout(location = 0) in vec2 uv;\n"
+               "layout(location = 0) out vec4 o;\n"
+               "void main() {\n"
+               "  vec4 c = vec4(texture(t, uv).rgb, 1.0);\n"
+               "  o = vec4(dot(pc.r, c), dot(pc.g, c), dot(pc.b, c), 1.0);\n"
+               "}\n";
+    }
     // ---- post passes before the present (Video tab "Anti-aliasing" / "Upscaler"): exec.c vk_present_draw.
     // Each draws a fullscreen triangle into an image the size of its output; push constants: two vec4.
     if (!strcmp(name, "post.vert")) {

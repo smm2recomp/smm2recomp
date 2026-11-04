@@ -10,7 +10,10 @@
 //
 // A tapped letter plays its SMM1 animation (anim.c) over SMM2's letter, which is hidden meanwhile; the animations are
 // drawn by the renderers' thread into the overlay (title_letters_image, after the 100 Mario flow's and the SMW goal
-// wipe's: smm1/flow.c). The SMM1 dump is opened on a thread of its own the first time the title shows.
+// wipe's: smm1/flow.c), with the letters' screen effects (effects.c: A's stars behind them, the drag's dust over them).
+// The SMM1 dump is opened on a thread of its own the first time the title shows, and the letters' sounds with it. If
+// the title goes without any of the hooks below noticing, the overlay's next frame finds it gone and turns K's sepia
+// and 8-bit music off (tl_effects_lost).
 //
 // A tap that starts and ends on the course behind the title (off the logo, its "2" and SMM2's buttons of the state:
 // the "Press L + R" bar in Wait, Make / Play in Top, the three Play choices in PlayMenu) spawns there (spawn.c).
@@ -78,6 +81,7 @@ static struct {
     bool down;                           // the touch, as last seen
     int start;                           // the letter the touch went down on
     bool bg;                             // ... or the background
+    bool off;                            // it slid off its letter (or the letter plays: no sounds)
     int32_t x, y;
 } T;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -124,6 +128,7 @@ void title_letters_hide(int letter, bool hidden) {
 static void forget(void) {  // (no pane is touched: they may be gone)
     tl_anim_reset();
     tl_spawn_reset();
+    tl_effects_reset();
     pthread_mutex_lock(&g_lock);
     memset(&T, 0, sizeof T);
     T.start = TL_NONE;
@@ -215,27 +220,39 @@ static bool background(int state, int32_t x, int32_t y) {
 // ---- the touch: a letter is tapped when the touch goes down and comes up on it (as SMM1's buttons: sliding off
 // cancels)
 static void letter_tapped(int letter, int32_t x, int32_t y) {
-    bool plays = g_data == 1 && tl_anim_start(letter, now_tick());
+    int tick = now_tick();
+    bool plays = g_data == 1 && tl_anim_start(letter, tick);
     LOG("[title] letter %s at %d,%d%s\n", tl_letter_name[letter], x, y,
         plays ? "" : g_data == 1 ? " (still playing: no new one)" : " (no SMM1 dump: nothing to play)");
+    if (plays) tl_effect_decide(letter, tl_anim_on(letter, tick), &T.pane[letter], tick);
 }
 
 static void *open_dump(void *arg) {
     (void)arg;
-    g_data = smm1_data_open() ? 1 : -1;
+    bool open = smm1_data_open();
+    if (open) tl_effects_load();
+    g_data = open ? 1 : -1;
     LOG("[title] SMM1 dump %s\n", g_data == 1 ? "open: the letters play" : "not found: the letters do nothing");
     return NULL;
 }
 
 static void follow_touch(int state) {
-    bool taps = state != 0;
+    bool taps = state != 0, ready = g_data == 1;
     int32_t x = T.x, y = T.y;
+    int tick = now_tick();
     bool down = touch_first(&x, &y);
     if (down && !T.down) {
         T.start = taps ? tl_hit(T.box, x, y) : TL_NONE;
         T.bg = T.start == TL_NONE && background(state, x, y);  // (a tap that starts and ends on the course)
+        T.off = false;
+        if (T.start != TL_NONE && ready && tl_anim_ready(T.start, tick)) tl_effect_touch(T.start);
+        else if (T.start != TL_NONE) T.off = true;  // (it plays: no sounds for this touch)
     }
+    if (down && T.start != TL_NONE && !T.off && tl_hit(T.box, x, y) != T.start)  // (slid off: SMM1's cancel)
+        T.off = true, tl_effect_untouch(T.start);
+    if (down && T.bg && ready) tl_effect_drag((float)x, (float)y, tick, !T.down);
     if (!down && T.down && T.start != TL_NONE && tl_hit(T.box, T.x, T.y) == T.start) letter_tapped(T.start, T.x, T.y);
+    if (!down && T.down && T.bg && ready) tl_effect_release((float)T.x, (float)T.y, tick);
     if (!down && T.down && T.bg && background(state, T.x, T.y)) tl_background_tap((float)T.x, (float)T.y);
     if (!down) T.start = TL_NONE, T.bg = false;
     T.down = down;
@@ -281,6 +298,7 @@ static void title_frame(Cpu *c, uint64_t owner, int state) {
     int tick = now_tick();
     for (int i = 0; i < TL_COUNT; i++)  // (SMM1's letter drawn: SMM2's hidden, whatever SMM2's animations set)
         title_letters_hide(i, tl_anim_busy(i, tick));
+    if (g_data == 1) tl_effects_frame(tick);
     tl_spawn_done();
 }
 
@@ -289,9 +307,17 @@ const uint8_t *title_letters_image(int *w, int *h, int *full, uint64_t *seq) {
     static LQuads q;
     static uint8_t *px;
     static uint64_t n;
-    if (g_data != 1 || !title_letters_active()) return NULL;
+    if (g_data != 1) return NULL;
+    if (!title_letters_active()) {  // (the title went without one of our hooks noticing: K's picture and music back)
+        tl_effects_lost();
+        return NULL;
+    }
     q.n = 0;
-    if (!tl_anim_draw(now_tick(), &q)) return NULL;
+    int tick = now_tick();
+    bool any = tl_effects_draw(tick, &q, false);  // (A's stars behind the letters, the dust over them)
+    any |= tl_anim_draw(tick, &q);
+    any |= tl_effects_draw(tick, &q, true);
+    if (!any) return NULL;
     if (!px && !(px = malloc(1280 * 720 * 4))) return NULL;
     memset(px, 0, 1280 * 720 * 4);
     lyt_raster(&q, px, 1280, 720, 1280, 720);
