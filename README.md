@@ -21,6 +21,28 @@ On top of the original game it adds:
 > assets, text, keys or recompiled output from Super Mario Maker 2 or Super Mario Maker. You point
 > the program at your own dump, and everything made from it is generated on your machine.
 
+## Screenshots
+
+| Title screen | Playing the title course | Make / Play |
+|---|---|---|
+| ![Title screen](docs/screenshots/title.jpg) | ![Mario running the title course](docs/screenshots/title-course.jpg) | ![Make and Play menu](docs/screenshots/menu.jpg) |
+
+**100 Mario Challenge**
+
+| Difficulty select | World map | Course-in card |
+|---|---|---|
+| ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) | ![SMM2's course-in card with 100 lives](docs/screenshots/100mario-card.jpg) |
+
+| Ending | Credits |
+|---|---|
+| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
+
+**SMM1 features as mods**
+
+| Lanky Mario | Mystery Mushroom costume | SMW goal wipe |
+|---|---|---|
+| ![Lanky Mario, tall and stretched, jumping in an SMB1-style course](docs/screenshots/lanky-mario.jpg) | ![Mario in SMM1's Sonic costume running through an SMB1-style sky course](docs/screenshots/costume.jpg) | ![SMW's black circle closing on Mario after the goal tape](docs/screenshots/smw-goal-wipe.jpg) |
+
 ## Play it
 
 A download is a **launcher plus the recompiler**, not the game: on first start it takes your dump,
@@ -95,28 +117,6 @@ first, with a search. Installing one downloads it from GameBanana onto your devi
 keeps its author, licence and page, shown with it. Mods are never part of this program or its downloads: they come
 from their authors, under their licences. Code patches (exefs / `.ips`) aren't supported yet; save-file level packs
 aren't mods of this kind.
-
-## Screenshots
-
-| Title screen | Playing the title course | Make / Play |
-|---|---|---|
-| ![Title screen](docs/screenshots/title.jpg) | ![Mario running the title course](docs/screenshots/title-course.jpg) | ![Make and Play menu](docs/screenshots/menu.jpg) |
-
-**100 Mario Challenge**
-
-| Difficulty select | World map | Course-in card |
-|---|---|---|
-| ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) | ![SMM2's course-in card with 100 lives](docs/screenshots/100mario-card.jpg) |
-
-| Ending | Credits |
-|---|---|
-| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
-
-**SMM1 features as mods**
-
-| Lanky Mario | Mystery Mushroom costume | SMW goal wipe |
-|---|---|---|
-| ![Lanky Mario, tall and stretched, jumping in an SMB1-style course](docs/screenshots/lanky-mario.jpg) | ![Mario in SMM1's Sonic costume running through an SMB1-style sky course](docs/screenshots/costume.jpg) | ![SMW's black circle closing on Mario after the goal tape](docs/screenshots/smw-goal-wipe.jpg) |
 
 ## Status
 
