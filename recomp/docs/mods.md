@@ -111,6 +111,16 @@ clear starts the next course without waiting for its download. It applies to eve
   `http://<domain>/level_data/<data id>` (public, no token). The game's own `GET` for it on port 80 is answered from
   the cache at the socket (`runtime/services/bsd_host.c` `game_http_answer`). If the game's download comes some other
   way twice, the preload stops for the session (logged). With `"ip"` in `ocw-config.json` it is off.
+  OCW answers each Endless search with **one** course (`num_levels = 1` in its `endless_type_normal.go`), so the game
+  searches after every course and there is no next course in the list to fetch. So one course is kept **in reserve**
+  (`endless.c` `search_with_reserve`): each search hands the game the course the last search brought, whose file was
+  fetched while the course before it was played, and the new course takes its place in the list's second entry
+  (`cp_swap_entries` moves an entry with the buffers it holds). The run's first search asks twice. OCW records no
+  "course handed out": the course the game starts becomes the run's course, and clear / skip / game over go by that, so
+  a course held one search longer plays the same. The reserve is moved to the list's last entry while GetCourses
+  writes the list, and dropped on another difficulty, a Course World list, quit, game over, a backend restart or a
+  list that changed; written over twice in a row, it is off for the session (logged). `RECOMP_MOD_TEST_RESERVE=1`
+  runs the same on our own server, its searches answering one random course each.
 - **Nextendo with `course_world=backend`, local-nex**: no preload (the game's own downloads); the timing lines below
   still show where the time goes.
 - 100 Mario on each of these takes the same path.

@@ -295,6 +295,18 @@ void mod_timing(const char *what) {  // a moment of the Endless play, for the lo
 
 static uint8_t *server_fetch(uint32_t id, size_t *len);
 
+#define RESERVE_SLOT 1
+static struct { bool on; uint32_t id; int d; uint64_t entries; uint32_t cap; } reserve;
+static int reserve_lost;   // reserves written over in a row ...
+static bool reserve_off;   // ... and after two, none for the session (each search would ask twice for nothing)
+static bool reserve_test(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("RECOMP_MOD_TEST_RESERVE") && atoi(getenv("RECOMP_MOD_TEST_RESERVE")) ? 1 : 0;
+    return v;
+}
+bool ocw_active(void);  // ocw.c
+void endless_reserve_drop(const char *why);
+
 // The list the game plays (NO_COURSES after an Endless search, either backend): its ids in order from the head
 static void capture_list(Cpu *c, uint64_t no) {
     uint32_t ids[64];
@@ -305,8 +317,10 @@ static void capture_list(Cpu *c, uint64_t no) {
     for (uint32_t i = 0; entries && cap && i < count && i < cap && n < 64; i++)
         ids[n++] = (uint32_t)g64(entries + (uint64_t)COURSE_ENTRY * ((head + i) % cap));
     netobj_unlock(c);
+    MLOG("timing: course list (%s): %d of 10%s\n", DIFF[req_diff(no, NO_SEARCH_DIFF)], n,  // (fewer: more searches)
+         reserve.on ? ", and one in reserve" : "");
+    if (reserve.on && n < 64) ids[n++] = reserve.id;  // (the course the next search hands the game: fetched after these)
     cp_set_list(ids, n, (int)req_diff(no, NO_SEARCH_DIFF));
-    MLOG("timing: course list (%s): %d of 10\n", DIFF[req_diff(no, NO_SEARCH_DIFF)], n);  // (fewer: more searches)
 }
 
 static uint64_t wrapper_subject(uint64_t off, uint64_t no) {  // the course a request is about (0: none)
@@ -318,17 +332,39 @@ static uint64_t wrapper_subject(uint64_t off, uint64_t no) {  // the course a re
     }
 }
 
-static void wrapper_before(uint64_t off, uint64_t no, bool native) {
+// GetCourses (0x14dbae0) writes the course list from the head too (on OCW the game asks for it after each skip): the
+// reserve is moved to the list's last entry while it runs, and back after, so it isn't written over.
+static bool reserve_parked;
+static void reserve_park(Cpu *c, uint64_t no, bool park) {
+    uint64_t ring = no + NO_COURSES, ents = g64(ring);
+    uint32_t cap = g32(ring + 8);
+    if (park) reserve_parked = false;
+    if (!reserve.on || ents != reserve.entries || cap != reserve.cap || cap <= RESERVE_SLOT + 1) return;
+    uint64_t e1 = ents + (uint64_t)COURSE_ENTRY * RESERVE_SLOT, far = ents + (uint64_t)COURSE_ENTRY * (cap - 1);
+    if (park ? (uint32_t)g64(e1) != reserve.id : !reserve_parked) return;
+    if (!park && (uint32_t)g64(far) != reserve.id) { reserve_parked = false; return; }  // (written over: dropped later)
+    netobj_lock(c);
+    bool moved = cp_swap_entries((void *)(uintptr_t)e1, (void *)(uintptr_t)far, COURSE_ENTRY);
+    netobj_unlock(c);
+    reserve_parked = park && moved;
+}
+
+static void wrapper_before(Cpu *c, uint64_t off, uint64_t no, bool native) {
     if (native && off == 0x14de010) ocw_preload_before((uint32_t)g64(no + NO_DL_ID));  // (no guest call: x0.. stay)
+    if (off == 0x14dbae0) reserve_park(c, no, true);
 }
 
 static void wrapper_after(Cpu *c, const char *name, uint64_t off, uint64_t no, uint64_t t0, bool native) {
     uint32_t status = g32(no + NO_STATUS);
     bool ok = status == 0 && (uint8_t)c->x[0] == wrapper_ok();
+    if (off == 0x14dbae0) reserve_park(c, no, false);
     if (native && off == 0x14de010) ocw_preload_after((uint32_t)g64(no + NO_DL_ID), ok);
     if (off == 0x14d8550 && g32(no + NO_SEARCH_TYPE) == 0xE && ok) capture_list(c, no);
-    else if (off == 0x14d8550) cp_clear("Course World");  // (a Course World list: Endless was left)
-    if (off == 0x14ed360 || off == 0x14ed4a0) cp_clear(off == 0x14ed360 ? "quit" : "game over");
+    else if (off == 0x14d8550) cp_clear("Course World"), endless_reserve_drop("Course World");  // (Endless was left)
+    if (off == 0x14ed360 || off == 0x14ed4a0) {
+        cp_clear(off == 0x14ed360 ? "quit" : "game over");
+        endless_reserve_drop(off == 0x14ed360 ? "quit" : "game over");
+    }
     if (!g_mod.log) return;
     uint64_t id = wrapper_subject(off, no);
     char code[12] = "-";
@@ -343,7 +379,7 @@ static void wrapper_after(Cpu *c, const char *name, uint64_t off, uint64_t no, u
     static void name(Cpu *c) {                                                                   \
         uint64_t no_ = c->x[0], t0_ = plat_now_ns();                                             \
         bool native_ = !mod_hundred();                                                           \
-        wrapper_before(off, no_, native_);                                                       \
+        wrapper_before(c, off, no_, native_);                                                    \
         if (native_) guest_call_orig(c, MAIN_ADDR(off));                                         \
         else name##_impl(c, no_);                                                                \
         wrapper_after(c, #name, off, no_, t0_, native_);                                         \
@@ -701,7 +737,139 @@ void mod_fill_course(uint64_t e, Json *m, uint32_t data_id, uint32_t difficulty)
     fill_course(e, m, data_id, difficulty);
 }
 
-WRAPPER(search_courses, 0x14d8550) {
+// ---- One course in reserve (issue #61). OpenCourse World answers each Endless search with one course, so the game
+// searches again after every course, and the next course isn't known until then: its download can't start early.
+// Here each search hands the game the course the last search brought (held in the list's second entry, its file
+// fetched while the course before it was played: course_preload.c), and the course the search brings now takes its
+// place. The first search of a run asks twice. OCW keeps no record of which course a search gave out: the course the
+// game starts is the run's course, and clear / skip / game over go by that (ocw-server db/dyna/endless_type_normal.go),
+// so a course held one search longer plays exactly as one just found. Each search still goes to OCW, the game's own.
+// Dropped (a fresh pair at the next search) on anything else: another difficulty, a Course World list, quit, game over,
+// a list the search wrote over, a backend restart. A course the reserve would repeat back to back is dropped too (OCW
+// counts a course started twice in a row as a lost life).
+// RECOMP_MOD_TEST_RESERVE=1 (tests): the same on our own server, whose searches then answer one course each.
+static bool reserve_wanted(bool native) { return g_mod.preload && (native ? ocw_active() : reserve_test()); }
+
+void endless_reserve_drop(const char *why) {
+    if (!strcmp(why, "backend restart")) reserve_off = false, reserve_lost = 0;
+    if (reserve.on) {
+        char code[12];
+        code_of(reserve.id, code);
+        MLOG("reserve %s: dropped (%s)\n", code, why);
+    }
+    reserve.on = false;
+}
+
+static void search_courses_impl(Cpu *c, uint64_t no);
+static void search_call(Cpu *c, uint64_t no, bool native, const uint64_t *args) {
+    memcpy(c->x, args, 8 * sizeof *args);  // (the request's own registers, for a second call)
+    if (native) guest_call_orig(c, MAIN_ADDR(0x14d8550));
+    else search_courses_impl(c, no);
+}
+static bool search_one(Cpu *c, uint64_t no, uint64_t ring) {  // the search ended well with one course at the head
+    return g32(no + NO_STATUS) == 0 && (uint8_t)c->x[0] == wrapper_ok() && g32(ring + 0xc) == 0 && g32(ring + 0x10) == 1;
+}
+
+static void search_with_reserve(Cpu *c, uint64_t no, bool native) {
+    uint64_t args[8];
+    memcpy(args, c->x, sizeof args);
+    uint32_t d = req_diff(no, NO_SEARCH_DIFF);
+    uint64_t ring = no + NO_COURSES, ents = g64(ring);
+    uint32_t cap = g32(ring + 8);
+    uint64_t e0 = ents, e1 = ents + (uint64_t)COURSE_ENTRY * RESERVE_SLOT;
+    bool have = reserve.on && reserve.d == (int)d && reserve.entries == ents && reserve.cap == cap && ents &&
+                cap > RESERVE_SLOT && (uint32_t)g64(e1) == reserve.id;
+    if (reserve.on && !have) {
+        bool lost = reserve.d == (int)d;  // (same difficulty: something else wrote over it)
+        endless_reserve_drop(lost ? "the list changed" : "another difficulty");
+        if (lost && ++reserve_lost >= 2) {
+            reserve_off = true;
+            LOG("[mod] reserve: off for this session (the game wrote over the held course twice)\n");
+        }
+    }
+    if (reserve_off) {
+        search_call(c, no, native, args);
+        return;
+    }
+    if (have) {  // (the new course goes to the head, the reserve stays where it is)
+        netobj_lock(c);
+        s32(ring + 0xc, 0), s32(ring + 0x10, 0);
+        netobj_unlock(c);
+    }
+    search_call(c, no, native, args);
+    if (!ents || cap <= RESERVE_SLOT || !search_one(c, no, ring)) {
+        // (a failure: the game's own error and retry, the reserve kept for it; more than one course: nothing to hold)
+        if (g32(no + NO_STATUS) == 0 && g32(ring + 0x10) != 1) endless_reserve_drop("the search brought more than one");
+        return;
+    }
+    uint32_t got = (uint32_t)g64(e0);
+    char a[12], b[12];
+    if (have) {
+        if ((uint32_t)g64(e1) != reserve.id) { endless_reserve_drop("the search wrote over it"); return; }
+        netobj_lock(c);
+        bool moved = cp_swap_entries((void *)(uintptr_t)e0, (void *)(uintptr_t)e1, COURSE_ENTRY);
+        netobj_unlock(c);
+        if (!moved) { endless_reserve_drop("no memory"); return; }
+        uint32_t now = reserve.id;
+        reserve.id = got, reserve_lost = 0;
+        code_of(now, a), code_of(got, b);
+        MLOG("reserve: %s now (held since the last search), %s held for the next\n", a, b);
+        if (got == now) endless_reserve_drop("the same course again");
+        return;
+    }
+    // no reserve yet: this course goes to the second entry, and a second search brings the one played now
+    uint64_t x0 = c->x[0];
+    uint32_t st = g32(no + NO_STATUS);
+    netobj_lock(c);
+    bool moved = cp_swap_entries((void *)(uintptr_t)e0, (void *)(uintptr_t)e1, COURSE_ENTRY);
+    s32(ring + 0xc, 0), s32(ring + 0x10, 0);
+    netobj_unlock(c);
+    if (!moved) {
+        netobj_lock(c);
+        s32(ring + 0x10, 1);
+        netobj_unlock(c);
+        return;
+    }
+    search_call(c, no, native, args);
+    uint32_t now = (uint32_t)g64(e0);
+    bool second = search_one(c, no, ring), first_kept = (uint32_t)g64(e1) == got;
+    if (second && first_kept && now != got) {
+        reserve.on = true, reserve.id = got, reserve.d = (int)d, reserve.entries = ents, reserve.cap = cap;
+        code_of(now, a), code_of(got, b);
+        MLOG("reserve: %s now, %s held for the next (two searches: the run's first)\n", a, b);
+        return;
+    }
+    if (first_kept) {  // (the second search failed or brought the same course: the first one's answer, as if alone)
+        netobj_lock(c);
+        cp_swap_entries((void *)(uintptr_t)e0, (void *)(uintptr_t)e1, COURSE_ENTRY);
+        s32(ring + 0xc, 0), s32(ring + 0x10, 1);
+        netobj_unlock(c);
+        s32(no + NO_STATUS, st);
+        c->x[0] = x0;
+        MLOG("reserve: none this time (the second search %s)\n", second ? "brought the same course" : "failed");
+        return;
+    }
+    // (the second search wrote over the first one's course: its own answer stands, a course or the game's error
+    // and retry, with nothing stale in the list)
+    if (!second) {
+        netobj_lock(c);
+        s32(ring + 0xc, 0), s32(ring + 0x10, 0);
+        netobj_unlock(c);
+    }
+    MLOG("reserve: none this time (the second search wrote over the first)\n");
+}
+
+static void search_courses(Cpu *c) {
+    uint64_t no = c->x[0], t0 = plat_now_ns();
+    bool native = !mod_hundred();
+    wrapper_before(c, 0x14d8550, no, native);
+    if (g32(no + NO_SEARCH_TYPE) == 0xE && reserve_wanted(native)) search_with_reserve(c, no, native);
+    else if (native) guest_call_orig(c, MAIN_ADDR(0x14d8550));
+    else search_courses_impl(c, no);
+    wrapper_after(c, "search_courses", 0x14d8550, no, t0, native);
+}
+
+static void search_courses_impl(Cpu *c, uint64_t no) {
     if (g32(no + NO_SEARCH_TYPE) != 0xE) {  // Course World's lists (world.c)
         extern void world_search(Cpu * c, uint64_t no, uint32_t type);
         world_search(c, no, g32(no + NO_SEARCH_TYPE));
@@ -713,11 +881,13 @@ WRAPPER(search_courses, 0x14d8550) {
     Json *j = next_courses(path);
     if (!j) { finish(c, no, false, 2); return; }
     Json *list = json_get(j, "courses");
+    // (the reserve test: one course a search, picked at random from the ten, as OCW answers)
+    size_t pick = reserve_test() && json_len(list) ? (size_t)rand() % json_len(list) : 0;
     netobj_lock(c);
     uint64_t ring = no + NO_COURSES, entries = g64(ring);
     uint32_t cap = g32(ring + 8), count = 0;
     s64(ring + 0xc, 0);
-    for (size_t i = 0; i < json_len(list) && count < cap && entries; i++) {
+    for (size_t i = pick; i < json_len(list) && count < cap && entries && !(reserve_test() && count); i++) {
         Json *m = json_at(list, i);
         uint32_t id;
         if (!code_to_data_id(json_str(json_get(m, "code"), ""), &id)) continue;

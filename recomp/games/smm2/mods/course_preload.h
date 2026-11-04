@@ -41,6 +41,11 @@ bool cp_valid(int kind, const uint8_t *d, size_t n);
 // "GET /level_data/<id> HTTP/1.x" with "Host: <host>" whose file is held; *resp (malloc'd) is the whole answer.
 bool cp_http_answer(const char *host, const char *req, size_t len, uint8_t **resp, size_t *rlen, uint32_t *id);
 
+// Swap two course-list entries of n bytes (n a multiple of 8) in place: a pointer inside one that points into that
+// same entry (a string object's buffer held in the entry) is rebased to the other, everything else moves as it is
+// (the OCW reserve, endless.c)
+bool cp_swap_entries(void *a, void *b, size_t n);  // (false: no memory, nothing moved)
+
 extern volatile bool cp_verbose;                    // log each fetch and hit (the mod's log switch)
 extern void (*cp_name)(uint32_t id, char out[12]);  // a data id as a course code, for the log (NULL: the number)
 // tests: the clock the age rule reads (seconds; NULL: the monotonic clock); wait until no fetch is queued or running

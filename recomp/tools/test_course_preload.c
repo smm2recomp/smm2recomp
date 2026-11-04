@@ -344,6 +344,45 @@ static void test_http(void) {
     printf("ok http\n");
 }
 
+// Two course-list entries swapped in place (the OCW reserve, endless.c): what each holds moves to the other, and a
+// pointer into the entry itself (a string object's buffer inside the entry) is moved with it, so it still points into
+// the entry it is in; a pointer elsewhere moves as it is.
+static void test_swap_entries(void) {
+    enum { N = 0x548 };
+    static _Alignas(8) uint8_t ring[2 * N];
+    static uint8_t outside;
+    uint8_t *a = ring, *b = ring + N;
+    uint64_t v;
+    memset(ring, 0, sizeof ring);
+    v = 111, memcpy(a + 0x00, &v, 8);                          // data id
+    v = (uint64_t)(uintptr_t)(a + 0x100), memcpy(a + 0x10, &v, 8);  // the code's buffer, inside the entry
+    v = (uint64_t)(uintptr_t)&outside, memcpy(a + 0x20, &v, 8);     // something elsewhere
+    memcpy(a + 0x100, "AAA", 4);
+    v = 222, memcpy(b + 0x00, &v, 8);
+    v = (uint64_t)(uintptr_t)(b + 0x100), memcpy(b + 0x10, &v, 8);
+    v = 0, memcpy(b + 0x20, &v, 8);
+    memcpy(b + 0x100, "BBB", 4);
+    v = (uint64_t)(uintptr_t)(b + N), memcpy(b + 0x28, &v, 8);  // just past the entry: not inside it
+    CHECK("swap: done", cp_swap_entries(a, b, N));
+    memcpy(&v, a + 0x00, 8);
+    CHECK("swap: ids", v == 222);
+    memcpy(&v, b + 0x00, 8);
+    CHECK("swap: ids", v == 111);
+    memcpy(&v, a + 0x10, 8);
+    CHECK("swap: a's buffer in a", v == (uint64_t)(uintptr_t)(a + 0x100));
+    memcpy(&v, b + 0x10, 8);
+    CHECK("swap: b's buffer in b", v == (uint64_t)(uintptr_t)(b + 0x100));
+    CHECK("swap: contents", !memcmp(a + 0x100, "BBB", 4) && !memcmp(b + 0x100, "AAA", 4));
+    memcpy(&v, b + 0x20, 8);
+    CHECK("swap: outside pointer moves as it is", v == (uint64_t)(uintptr_t)&outside);
+    memcpy(&v, a + 0x28, 8);
+    CHECK("swap: past the end is not rebased", v == (uint64_t)(uintptr_t)(b + N));
+    cp_swap_entries(a, b, N);
+    memcpy(&v, a + 0x10, 8);
+    CHECK("swap back", v == (uint64_t)(uintptr_t)(a + 0x100) && !memcmp(a + 0x100, "AAA", 4));
+    printf("ok swap entries\n");
+}
+
 int main(void) {
     test_valid();
     test_next_in_list();
@@ -355,6 +394,7 @@ int main(void) {
     test_age();
     test_capacity();
     test_http();
+    test_swap_entries();
     reset();
     if (failures) { printf("%d FAILED\n", failures); return 1; }
     printf("course preload: all passed\n");

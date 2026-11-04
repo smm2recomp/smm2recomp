@@ -158,8 +158,11 @@ static volatile bool preload_stopped;
 static volatile uint32_t served_id;  // the file the last answer of ours was
 static int not_seen;                 // files held that the game's download went past
 
+void endless_reserve_drop(const char *why);  // endless.c
+
 static void preload_reset(void) {
     cp_clear("backend restart");
+    endless_reserve_drop("backend restart");
     preload_stopped = false, served_id = 0, not_seen = 0;
 }
 

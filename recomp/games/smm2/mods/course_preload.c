@@ -338,3 +338,22 @@ bool cp_http_answer(const char *host, const char *req, size_t len, uint8_t **res
     if (id) *id = (uint32_t)v;
     return true;
 }
+
+static void rebase(uint8_t *buf, size_t n, uintptr_t from, uintptr_t to) {  // (pointers into [from, from+n) -> to)
+    for (size_t o = 0; o + 8 <= n; o += 8) {
+        uint64_t v;
+        memcpy(&v, buf + o, 8);
+        if (v >= from && v < from + n) v = v - from + to, memcpy(buf + o, &v, 8);
+    }
+}
+
+bool cp_swap_entries(void *a, void *b, size_t n) {
+    uint8_t *ta = malloc(n), *tb = malloc(n);
+    if (!ta || !tb) { free(ta), free(tb); return false; }
+    memcpy(ta, a, n), memcpy(tb, b, n);
+    rebase(ta, n, (uintptr_t)a, (uintptr_t)b);
+    rebase(tb, n, (uintptr_t)b, (uintptr_t)a);
+    memcpy(a, tb, n), memcpy(b, ta, n);
+    free(ta), free(tb);
+    return true;
+}
