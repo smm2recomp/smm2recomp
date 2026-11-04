@@ -96,6 +96,43 @@ Data ids and course codes map 1:1 (`games/smm2/mods/course.c`, the same arithmet
 A maker's player id is a hash of their maker ID on our server (the player's own too), so the game's "my course"
 and "me" checks work.
 
+### The next course, fetched ahead (`games/smm2/mods/course_preload.c`, issue #61)
+
+The game plays its Endless list (10 courses a search) in order. Once the search is answered, the mod knows which
+courses come next. While one course is played, the files of the next two are fetched on a host thread, so a skip or a
+clear starts the next course without waiting for its download. It applies to every backend:
+
+- **Ours, TGRCode (the built-in server), Nextendo's default (hybrid)**: the fetch starts as soon as the game's own
+  download of the current course is done. If the game asks for a course whose fetch is still running (a skip right
+  after the start), it waits on that fetch with its core given up. It never starts a second download of the same
+  course. At the end of the list, the server's queue names the next course.
+- **OpenCourse World**: the game's own GetObject still runs: DataStore PrepareGetObject goes to OCW for every
+  course, so OCW's own bookkeeping is unchanged. Only the file transfer is replaced. The file is fetched from
+  `http://<domain>/level_data/<data id>` (public, no token). The game's own `GET` for it on port 80 is answered from
+  the cache at the socket (`runtime/services/bsd_host.c` `game_http_answer`). If the game's download comes some other
+  way twice, the preload stops for the session (logged). With `"ip"` in `ocw-config.json` it is off.
+- **Nextendo with `course_world=backend`, local-nex**: no preload (the game's own downloads); the timing lines below
+  still show where the time goes.
+- 100 Mario on each of these takes the same path.
+
+The rules (`tools/test_course_preload.c`, `make test-course-preload`, run by `scripts/check.sh`):
+
+- The cache is keyed by data id and holds at most 3 files.
+- A file is served only after its size and header check: our server's 0x5bfc0 bytes, or OCW's 0x5c000 bytes with
+  `01 00 00 00 10 00`, `SCDL`. The game's own CRC and validity checks still run.
+- Anything else (a miss, a failed fetch, a wrong size) goes to the game's normal download.
+- Everything is dropped on a new search with another difficulty, on Save & Quit, a game over, a run's end, a Course
+  World search (Endless left) and a backend restart. Files older than 15 minutes are dropped too.
+- The switch: Mods > Courses "Preload the next course" (`preload=0/1`, `RECOMP_MOD_PRELOAD`), on by default.
+
+**Timing lines** (with `log=1`): `timing: <request> <code>: <ms> ms, status <n> (the mod's | the game's own) @<s>` for
+every Endless request, `timing: course list (<d>): n of 10`, and the play scene's moments (`state cSlidePass`,
+`cCourseListDownLoad`, `cCourseDataDownLoad`, `play scene exit`). With `net_log=1`, each TCP socket the game closes
+logs its bytes, connect / first-byte / total times, recv and poll counts and, for port 80, the request line.
+
+`RECOMP_MOD_PRELOAD_TEST_OCW=<domain>/<data id>` runs the OCW path once at start-up without an account: the fetch, the
+checks, the cache and the answer the game's `GET` would get. One `[ocw] preload self-test ... PASS | FAIL` line.
+
 ### Course World against our server (`games/smm2/mods/world.c`)
 
 The rest of Course World goes to our server too. Each request's name is the DataStore (SMM2) method its function
@@ -1463,6 +1500,10 @@ Nothing: `hy_mode` (`games/smm2/mods/hybrid.h`) gives the `ocw` backend `{world 
 World, the Endless Challenge and 100 Mario are all OCW's own, as `course_world=backend` does for Nextendo. Because
 it is not hybrid, the mid-session fall-back to our server on a failed login (`net_backend_fall_back`, which Nextendo
 uses) does not apply here.
+
+The one exception is the next-course preload ("The next course, fetched ahead" above). It fetches the next Endless
+course files from `http://<domain>/level_data/<id>` and answers the game's own `GET` for them. The game's DataStore
+requests still go to OCW.
 
 ### The account
 

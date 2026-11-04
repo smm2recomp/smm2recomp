@@ -14,6 +14,7 @@
 
 #include "mod.h"
 #include "../../../runtime/net/json.h"
+#include "course_preload.h"
 #include "hundred.h"
 #include <unistd.h>
 
@@ -278,11 +279,74 @@ static void set_play(Cpu *c, uint64_t no, uint32_t d, uint32_t lives, uint32_t c
 static uint32_t lives_now(uint64_t no, uint32_t d) { return g8(record(no, d) + 0x30); }
 static uint32_t clears_now(uint64_t no, uint32_t d) { return g32(record(no, d) + 0x2c); }
 
+// ---- around every request below, the mod's answer or the game's own (another backend): how long it took (the mod's
+// log switch: issue #61's waits), and the preload's hooks (course_preload.h): the Endless list once a search is
+// answered, the files of the courses after the one downloaded, everything dropped when the run ends.
+extern uint64_t plat_now_ns(void);
+void srv_wait_notice(bool on);  // server.c
+void ocw_preload_before(uint32_t id);  // ocw.c: the game's own download (backend ocw)
+void ocw_preload_after(uint32_t id, bool ok);
+
+static uint64_t t_base;  // (endless_register: start-up)
+static double t_since(uint64_t t) { return (double)(t - t_base) / 1e9; }
+void mod_timing(const char *what) {  // a moment of the Endless play, for the log: "timing: <what> @<s since start>"
+    if (g_mod.log) LOG("[mod] timing: %s @%.3f\n", what, t_since(plat_now_ns()));
+}
+
+static uint8_t *server_fetch(uint32_t id, size_t *len);
+
+// The list the game plays (NO_COURSES after an Endless search, either backend): its ids in order from the head
+static void capture_list(Cpu *c, uint64_t no) {
+    uint32_t ids[64];
+    int n = 0;
+    netobj_lock(c);
+    uint64_t ring = no + NO_COURSES, entries = g64(ring);
+    uint32_t cap = g32(ring + 8), head = g32(ring + 0xc), count = g32(ring + 0x10);
+    for (uint32_t i = 0; entries && cap && i < count && i < cap && n < 64; i++)
+        ids[n++] = (uint32_t)g64(entries + (uint64_t)COURSE_ENTRY * ((head + i) % cap));
+    netobj_unlock(c);
+    cp_set_list(ids, n, (int)req_diff(no, NO_SEARCH_DIFF));
+    MLOG("timing: course list (%s): %d of 10\n", DIFF[req_diff(no, NO_SEARCH_DIFF)], n);  // (fewer: more searches)
+}
+
+static uint64_t wrapper_subject(uint64_t off, uint64_t no) {  // the course a request is about (0: none)
+    switch (off) {
+    case 0x14de010: return g64(no + NO_DL_ID);
+    case 0x14ecf30: case 0x14ed5e0: return g64(no + NO_COURSE_ID);
+    case 0x14ed120: return g64(no + NO_CLEAR_ID);
+    default: return 0;
+    }
+}
+
+static void wrapper_before(uint64_t off, uint64_t no, bool native) {
+    if (native && off == 0x14de010) ocw_preload_before((uint32_t)g64(no + NO_DL_ID));  // (no guest call: x0.. stay)
+}
+
+static void wrapper_after(Cpu *c, const char *name, uint64_t off, uint64_t no, uint64_t t0, bool native) {
+    uint32_t status = g32(no + NO_STATUS);
+    bool ok = status == 0 && (uint8_t)c->x[0] == wrapper_ok();
+    if (native && off == 0x14de010) ocw_preload_after((uint32_t)g64(no + NO_DL_ID), ok);
+    if (off == 0x14d8550 && g32(no + NO_SEARCH_TYPE) == 0xE && ok) capture_list(c, no);
+    else if (off == 0x14d8550) cp_clear("Course World");  // (a Course World list: Endless was left)
+    if (off == 0x14ed360 || off == 0x14ed4a0) cp_clear(off == 0x14ed360 ? "quit" : "game over");
+    if (!g_mod.log) return;
+    uint64_t id = wrapper_subject(off, no);
+    char code[12] = "-";
+    if (id) code_of(id, code);
+    MLOG("timing: %s %s: %llu ms, status %u (%s) @%.3f\n", name, code,
+         (unsigned long long)((plat_now_ns() - t0) / 1000000), status, native ? "the game's own" : "the mod's",
+         t_since(t0));
+}
+
 #define WRAPPER(name, off)                                                                       \
     static void name##_impl(Cpu *c, uint64_t no);                                                \
     static void name(Cpu *c) {                                                                   \
-        if (!mod_hundred()) { guest_call_orig(c, MAIN_ADDR(off)); return; }                      \
-        name##_impl(c, c->x[0]);                                                                 \
+        uint64_t no_ = c->x[0], t0_ = plat_now_ns();                                             \
+        bool native_ = !mod_hundred();                                                           \
+        wrapper_before(off, no_, native_);                                                       \
+        if (native_) guest_call_orig(c, MAIN_ADDR(off));                                         \
+        else name##_impl(c, no_);                                                                \
+        wrapper_after(c, #name, off, no_, t0_, native_);                                         \
     }                                                                                            \
     static void name##_impl(Cpu *c, uint64_t no)
 
@@ -767,25 +831,22 @@ WRAPPER(course_post, 0x14f2910) {
     finish(c, no, true, 0);
 }
 
-// The next course's file, fetched while the current one is played (the server's queue: the course after the one at
-// its head), so the next download is immediate.
-static pthread_mutex_t pf_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t pf_id;
-static uint8_t *pf_data;
-static size_t pf_len;
-
-static uint8_t *take_prefetched(uint32_t id, size_t *len) {
-    pthread_mutex_lock(&pf_lock);
-    uint8_t *d = NULL;
-    if (pf_data && pf_id == id) d = pf_data, *len = pf_len, pf_data = NULL, pf_id = 0;
-    pthread_mutex_unlock(&pf_lock);
-    return d;
-}
-
+// The next courses' files, fetched while the current one is played (course_preload.h): the ones after it in the
+// game's list as soon as its own download is done (get_course_file), so a skip right after a course starts finds the
+// next one held or under way (it waits on that fetch, never starting a second one of the same course: issue #61). At
+// the list's end the server's queue names the next one (the course after the one at its head; start_course).
+//
 // A course's data: a listed TGRCode course the server doesn't hold yet is fetched first, in TGRCode's turn (about one
 // request in 5-7 s, behind any other client's): waited for up to 20 s (the server's most), so the first try works
 // (owner, 2026-10-23: "course ID not found" on the first try, the second worked)
 #define DATA_WAIT_MS 20000
+static uint8_t *server_fetch(uint32_t id, size_t *len) {  // (the preload's thread)
+    char code[12], path[96];
+    code_of(id, code);
+    snprintf(path, sizeof path, "/api/courses/%s/data?wait_ms=%d", code, DATA_WAIT_MS);
+    return srv_get_bytes_slow(path, len, DATA_WAIT_MS + 6000);
+}
+
 static void *prefetch_data_thread(void *arg) {
     int d = (int)(intptr_t)arg;
     char path[96];
@@ -793,16 +854,8 @@ static void *prefetch_data_thread(void *arg) {
     Json *j = next_courses(path);
     Json *m = json_at(json_get(j, "courses"), 1);
     uint32_t id;
-    if (m && code_to_data_id(json_str(json_get(m, "code"), ""), &id)) {
-        snprintf(path, sizeof path, "/api/courses/%s/data?wait_ms=%d", json_str(json_get(m, "code"), ""), DATA_WAIT_MS);
-        size_t len = 0;
-        uint8_t *data = srv_get_bytes_slow(path, &len, DATA_WAIT_MS + 6000);
-        pthread_mutex_lock(&pf_lock);
-        free(pf_data);
-        pf_data = data, pf_len = len, pf_id = data ? id : 0;
-        pthread_mutex_unlock(&pf_lock);
-        if (data) MLOG("next course's data fetched ahead: %s\n", json_str(json_get(m, "code"), ""));
-    }
+    if (m && code_to_data_id(json_str(json_get(m, "code"), ""), &id) && cp_want(id, CP_PLAIN, server_fetch))
+        MLOG("preload %s: the server's next, past the list's end\n", json_str(json_get(m, "code"), ""));
     json_free(j);
     return NULL;
 }
@@ -840,14 +893,24 @@ WRAPPER(get_course_file, 0x14de010) {
     code_of(id, code);
     snprintf(path, sizeof path, "/api/courses/%s/data?wait_ms=%d", code, DATA_WAIT_MS);
     size_t len = 0;
-    uint8_t *data = take_prefetched((uint32_t)id, &len);
-    if (data) MLOG("course %s: prefetched\n", code);
+    uint8_t *data = NULL;
+    int waited = 0, was = g_mod.preload ? cp_state((uint32_t)id, CP_PLAIN) : CP_NONE, how = CP_MISS;
+    if (was != CP_NONE) {  // (held, or its fetch under way: waited on, as long as a download of its own could take)
+        srv_wait_notice(true);
+        how = cp_take((uint32_t)id, CP_PLAIN, DATA_WAIT_MS + 6000, &data, &len, &waited);
+        srv_wait_notice(false);
+    }
+    if (how == CP_HIT) MLOG("course %s: preloaded\n", code);
+    else if (how == CP_JOINED) MLOG("course %s: preload joined, %d ms\n", code, waited);
     else {
+        if (was != CP_NONE)
+            MLOG("course %s: the preload %s: downloaded now\n", code, was == CP_FAILED ? "failed" : "didn't end");
         extern void srv_waited(bool on);  // (server.c: a slow answer says so over the game's black screen)
         srv_waited(true);
         data = srv_get_bytes_slow(path, &len, DATA_WAIT_MS + 6000);
         srv_waited(false);
     }
+    if (g_mod.preload) cp_after((uint32_t)id, CP_PLAIN, server_fetch);  // (the next ones, while this one is played)
     if (!data || len != COURSE_SIZE || !dest) {
         LOG("[mod] course %s: %s\n", code, data ? "not a course (size)" : "download failed");
         free(data);
@@ -934,7 +997,7 @@ WRAPPER(start_course, 0x14ecf30) {
         runs[d].current = id;
         pthread_mutex_unlock(&state_lock);
         bridge_event("start", d);
-        prefetch_data(d);
+        if (g_mod.preload && !cp_next_known((uint32_t)id)) prefetch_data(d);  // (past the list: the server's next)
         LOG("[mod] course start %s (%s): lives %u\n", code, DIFF[d], lives_now(no, d));
         json_free(st);
         finish(c, no, ok, 2);
@@ -1146,6 +1209,7 @@ void endless_forget_run(int d) {
     pthread_mutex_lock(&state_lock);
     memset(&runs[d], 0, sizeof runs[d]);
     pthread_mutex_unlock(&state_lock);
+    cp_clear("run over");
 }
 
 bool endless_has_course(uint64_t id) {  // world.c: is this course the one an Endless run is on
@@ -1178,7 +1242,23 @@ bool endless_run_complete(uint32_t d) {
     return v;
 }
 
+// The play scene's moments around a course change, for the log (timing; [obs research/specs/endless-challenge.md 4.3]):
+// cSlidePass's enter (the skip is posted there) and the scene's exit (to the next course after a skip: scene 0x26).
+// (cCourseListDownLoad / cCourseDataDownLoad: bridge.c's overrides log theirs.)
+static void slide_pass_enter(Cpu *c) {
+    mod_timing("state cSlidePass (skip)");
+    guest_call_orig(c, MAIN_ADDR(0x1bbb3f0));
+}
+static void play_scene_exit(Cpu *c) {
+    mod_timing("play scene exit");
+    guest_call_orig(c, MAIN_ADDR(0x1bb9a10));
+}
+
 void endless_register(void) {
+    cp_name = data_id_to_code;  // (cp_verbose: settings.c, once they are read)
+    t_base = plat_now_ns();
+    hle_override(MAIN_ADDR(0x1bbb3f0), slide_pass_enter, "mod: Endless play cSlidePass (timing)");
+    hle_override(MAIN_ADDR(0x1bb9a10), play_scene_exit, "mod: Endless play scene exit (timing)");
     hle_override(MAIN_ADDR(0x14ec2d0), get_status, "mod: GetEndlessModeStatus");
     hle_override(MAIN_ADDR(0x1a223e0), tab_expert, "mod: Endless tab Expert");
     hle_override(MAIN_ADDR(0x1a224a0), tab_super_expert, "mod: Endless tab Super Expert");

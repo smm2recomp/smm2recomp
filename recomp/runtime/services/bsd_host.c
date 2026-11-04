@@ -17,6 +17,11 @@
 //
 // Message layouts as in bsd.c: results {i32 ret, u32 errno} (+ a length); addresses are FreeBSD's sockaddr_in
 // {u8 len, u8 family 2, u16 port BE, u32 addr BE, 8 zero}; pollfd {i32 fd, i16 events, i16 revents}.
+//
+// A plain-HTTP request the game sends may be answered by the game's mods instead (game_http_answer: SMM2 serves a
+// course file it fetched ahead, games/smm2/mods/course_preload.h): the answer then stands in for the connection's
+// stream ("canned": reads come from it, then end of stream; the request isn't sent; the socket polls ready).
+// net_log=1: each socket's bytes and times when the game closes it, and a plain-HTTP socket's request line.
 #include "bsd.h"
 
 #include <pthread.h>
@@ -47,7 +52,17 @@ struct BsdSock {
     uint32_t peer_ip;
     uint16_t peer_port;
     int64_t rcvtimeo_ms, sndtimeo_ms;  // SO_RCVTIMEO / SO_SNDTIMEO (0: none)
+    uint8_t *canned;                   // the answer that stands in for the stream (NULL: the real one)
+    size_t canned_len, canned_off;
+    // (net_log: the summary at close)
+    uint64_t t_open, t_conn, t_first_in;  // ns
+    uint64_t bytes_out, bytes_in;
+    uint32_t recvs, polls;
+    char first_line[100];  // a plain-HTTP socket's request line (redacted)
 };
+
+// The game's mods may answer a plain-HTTP request (runtime/game_hooks.c: none by default); *resp is malloc'd.
+bool game_http_answer(uint32_t ip, uint16_t port, const void *req, size_t len, uint8_t **resp, size_t *resp_len);
 
 static BsdSock *table[MAX_FDS];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -115,6 +130,7 @@ void bsd_sock_unref(BsdSock *s) {
     if (last) {
         if (kept) NLOG("[bsd] UDP port %u parked (%d s)\n", s->guest_port, PARK_SECONDS);
         else hsock_close(s->h);
+        free(s->canned);
         free(s);
     }
 }
@@ -183,12 +199,17 @@ int bsd_sock_wait(BsdSock *s, bool write, int timeout_ms) { return wait_events(s
 
 int bsd_sock_send(BsdSock *s, const void *data, size_t len) {
     long n = send(s->h, (const char *)data, HSOCK_IOLEN(len), MSG_NOSIGNAL);
+    if (n >= 0) s->bytes_out += (uint64_t)n;
+    if (n >= 0 && !s->t_conn) s->t_conn = plat_now_ns();
     if (n >= 0) return (int)n;
     return hsock_would_block(hsock_errno()) ? -1 : -2;
 }
 
 int bsd_sock_recv(BsdSock *s, void *data, size_t len) {
     long n = recv(s->h, (char *)data, HSOCK_IOLEN(len), 0);
+    s->recvs++;
+    if (n > 0 && !s->t_first_in) s->t_first_in = plat_now_ns();
+    if (n >= 0) s->bytes_in += (uint64_t)n;
     if (n >= 0) return (int)n;
     return hsock_would_block(hsock_errno()) ? -1 : -2;
 }
@@ -331,6 +352,12 @@ static int poll_fds(int32_t *fds, int16_t *events, int16_t *revents, uint32_t n,
         p[i].fd = ss[i] ? ss[i]->h : HSOCK_BAD;
         p[i].events = ss[i] ? ev_to_host(events[i]) : 0;
         if (fds[i] >= 0 && !ss[i]) revents[i] = 0x20, ready++;  // POLLNVAL
+        if (ss[i]) ss[i]->polls++;
+        if (ss[i] && ss[i]->canned) {  // (an answer standing in for the stream: readable and writable now)
+            revents[i] = ev_from_host(p[i].events & (POLLIN | POLLOUT), events[i]);
+            ready += revents[i] != 0;
+            p[i].fd = HSOCK_BAD, p[i].events = 0;
+        }
     }
     uint64_t end = timeout_ms < 0 ? UINT64_MAX : plat_now_ns() + (uint64_t)timeout_ms * 1000000;
     bool released = false;
@@ -442,6 +469,26 @@ static void do_send(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
     if (req->cmd == 11 && get_addr(in_buf(req, 1), &ip, &port)) has_to = true;
     if ((has_to || s->peer_ip) && !dest_ok(s, ip)) { log_refused("send to", ip, port); result(resp, -1, BSD_ENETUNREACH); return; }
     if (has_to) host_addr(&to, ip, net_dest_port(ip, port));
+    if (s->type == 1 && !s->first_line[0] && len >= 4 && port == 80) {  // (net_log: what a plain-HTTP socket asks)
+        char line[sizeof s->first_line];
+        size_t k = 0;
+        while (k < len && k < sizeof line - 1 && data[k] != '\r' && data[k] != '\n') line[k] = data[k], k++;
+        line[k] = 0;
+        net_log_redact(line, s->first_line, sizeof s->first_line);
+    }
+    if (s->type == 1 && !s->canned && !has_to && len) {
+        uint8_t *ans = NULL;
+        size_t alen = 0;
+        if (game_http_answer(ip, port, data, len, &ans, &alen) && ans) {
+            s->canned = ans, s->canned_len = alen, s->canned_off = 0;
+            NLOG("[bsd] send %d: %zu bytes answered by the game's mods (%zu bytes back)\n", fd, len, alen);
+        }
+    }
+    if (s->canned) {  // (the request goes nowhere: the answer is already there)
+        s->bytes_out += len;
+        result(resp, (int32_t)len, 0);
+        return;
+    }
     int hflags = MSG_NOSIGNAL | (flags & 1 ? MSG_OOB : 0);
     bool nb = s->nonblock || (flags & 0x80);
     for (;;) {
@@ -449,6 +496,8 @@ static void do_send(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
                         : send(s->h, data, HSOCK_IOLEN(len), hflags);
         if (n >= 0) {
             NLOG("[bsd] send %d: %ld bytes\n", fd, n);
+            s->bytes_out += (uint64_t)n;
+            if (!s->t_conn) s->t_conn = plat_now_ns();
             result(resp, (int32_t)n, 0);
             return;
         }
@@ -467,6 +516,17 @@ static void do_recv(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
     int hflags = (flags & 1 ? MSG_OOB : 0) | (flags & 2 ? MSG_PEEK : 0);
     bool nb = s->nonblock || (flags & 0x80), all = (flags & 0x40) && s->type == 1;
     size_t got = 0;
+    s->recvs++;
+    if (s->canned) {  // (the answer, then end of stream)
+        size_t n = s->canned_len - s->canned_off;
+        if (n > cap) n = cap;
+        if (data && n) memcpy(data, s->canned + s->canned_off, n);
+        if (!(flags & 2)) s->canned_off += n;  // (MSG_PEEK leaves it)
+        if (n && !s->t_first_in) s->t_first_in = plat_now_ns();
+        s->bytes_in += n;
+        result_len(resp, (int32_t)n, 0, req->cmd == 9 ? put_addr(out_buf(req, 1), s->peer_ip, s->peer_port) : 0);
+        return;
+    }
     for (;;) {
         struct sockaddr_in from;
         hsocklen_t fl = sizeof from;
@@ -477,6 +537,8 @@ static void do_recv(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
             uint32_t sip = ntohl(from.sin_addr.s_addr);
             if (s->type == 2 && !net_dest_allowed_udp(sip)) continue;  // (a datagram from outside: dropped)
             got += (size_t)n;
+            s->bytes_in += (uint64_t)n;
+            if (n > 0 && !s->t_first_in) s->t_first_in = plat_now_ns();
             if (all && n > 0 && got < cap) continue;
             uint32_t alen = 0;
             if (req->cmd == 9) alen = put_addr(out_buf(req, 1), s->type == 2 ? sip : s->peer_ip, s->type == 2 ? ntohs(from.sin_port) : s->peer_port);
@@ -507,7 +569,7 @@ static void do_socket(IpcReq *req, IpcResp *resp) {
     if (h == HSOCK_BAD) { result(resp, -1, hsock_bsd_errno(hsock_errno())); return; }
     hsock_nonblock(h);
     BsdSock *s = calloc(1, sizeof *s);
-    s->h = h, s->type = type, s->nonblock = nonblock;
+    s->h = h, s->type = type, s->nonblock = nonblock, s->t_open = plat_now_ns();
     int fd = fd_new(s);
     if (fd < 0) { hsock_close(h); free(s); result(resp, -1, BSD_EMFILE); return; }
     NLOG("[bsd] socket %d: %s%s\n", fd, type == 1 ? "TCP" : "UDP", nonblock ? " (non-blocking)" : "");
@@ -592,6 +654,7 @@ static void do_connect(BsdSock *s, int fd, IpcReq *req, IpcResp *resp) {
         err = BSD_EINPROGRESS;
     }
     if (!s->guest_port) s->guest_port = host_port_of(s->h);
+    if (r == 0 && !s->t_conn) s->t_conn = plat_now_ns();
     LOG("[bsd] connect %d (%s) to %s:%u%s: %s%s\n", fd, s->type == 1 ? "TCP" : "UDP", t, port, hport != port ? " (test server port)" : "",
         r == 0 ? "connected" : err == BSD_EINPROGRESS ? "in progress" : err == BSD_EISCONN ? "already connected" : "failed",
         s->nonblock ? " (non-blocking)" : "");
@@ -684,6 +747,7 @@ static void bsd_host_client_1(IpcReq *req, IpcResp *resp) {
             int avail = 0;
             ioctl(s->h, FIONREAD, &avail);
 #endif
+            if (s->canned) avail = (int)(s->canned_len - s->canned_off);
             *(uint32_t *)(uintptr_t)o->addr = (uint32_t)avail;
         }
         result(resp, 0, 0);
@@ -709,6 +773,18 @@ static void bsd_host_client_1(IpcReq *req, IpcResp *resp) {
         if (table[fd] == s) table[fd] = NULL, s->refs--, s->closed = true;
         pthread_mutex_unlock(&lock);
         NLOG("[bsd] close %d\n", fd);
+        if (net_log_on() && s->type == 1 && s->peer_ip) {  // (where a download's time went: connect, wait, transfer)
+            char a[16];
+            ip_to_str(s->peer_ip, a);
+            uint64_t now = plat_now_ns(), t0 = s->t_open;
+            long long conn = s->t_conn ? (long long)((s->t_conn - t0) / 1000000) : -1;
+            long long first = s->t_first_in ? (long long)((s->t_first_in - t0) / 1000000) : -1;
+            LOG("[bsd] fd %d %s:%u: out %llu / in %llu bytes, connect %lld ms, first byte %lld ms, total %llu ms, "
+                "%u recvs, %u polls%s%s%s%s\n", fd, a, s->peer_port, (unsigned long long)s->bytes_out,
+                (unsigned long long)s->bytes_in, conn, first, (unsigned long long)((now - t0) / 1000000), s->recvs,
+                s->polls, s->canned ? ", answered by the game's mods" : "", s->first_line[0] ? " (\"" : "",
+                s->first_line, s->first_line[0] ? "\")" : "");
+        }
         result(resp, 0, 0);
         break;
     }

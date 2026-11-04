@@ -21,6 +21,7 @@
 //
 // Nothing here does anything unless backend=ocw is chosen (smm2mods.ini, or the overlay's Mods tab) *and* a usable
 // ocw-config.json is present: the game is then unmodified and goes nowhere, exactly as before.
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +32,7 @@
 #include "../../../runtime/net/netcfg.h"
 #include "../../../runtime/net/http.h"
 #include "../../../runtime/kernel.h"
+#include "course_preload.h"
 #include "mod.h"
 #include "ocw.h"
 
@@ -105,8 +107,13 @@ static bool config_load(void) {
 
 // The modules are loaded and nothing of the game has run yet (runtime/mods.c mods_boot): write the domain into the
 // game's own host string, and tell the network stack which one host it may reach.
+static void preload_reset(void);
+static void preload_self_test(void);
+
 void game_modules_loaded(void) {
     g_ocw.active = false;  // (an in-game reboot onto another backend: the hook makes the game's own call again)
+    preload_reset();       // (the backend may be another one now: nothing fetched for the last is served)
+    preload_self_test();
     if (net_backend() != NET_BACKEND_OCW) return;  // (the game is left exactly as it is)
     if (!config_load()) return;
 
@@ -129,6 +136,147 @@ void game_modules_loaded(void) {
 }
 
 bool ocw_active(void) { return g_ocw.active; }
+
+// ---- the next Endless courses ahead (course_preload.h, issue #61). The game asks OCW for 10 courses a search and
+// plays them in order; each one's download is the game's own GetObject: DataStore PrepareGetObject over its NEX
+// connection, then an HTTP GET of the file. While a course is played, the files of the next CP_DEPTH in its list are
+// fetched from the same public address (http://<domain>/level_data/<data id>: no token, nothing of the account), and
+// when the game's own GET for one comes, its answer is the file held (runtime/services/bsd_host.c game_http_answer).
+//
+// Why at the socket and not in place of the whole GetObject (as endless.c serves our own server's courses): the
+// game's PrepareGetObject still goes to OCW for every course, so whatever OCW keeps of it (plays, its Endless
+// bookkeeping) stays as it was; only the file's transfer is replaced, and that is what a skip waits on. Anything that
+// doesn't match exactly (another URL, HTTPS, a file not held, a bad header) is left to the game's own path. If the
+// game's download doesn't come as that GET at all, fetching ahead is no use: it stops for the session (logged).
+// A fetch still under way when the game asks is waited on before the game's own call (its core given up), at most as
+// long as a download of the game's own might take.
+// "ip" in ocw-config.json (a self-hosted OCW at an address): off, since the fetch would ask the name's own address.
+#define OCW_PRELOAD_TIMEOUT_MS 20000
+extern uint64_t plat_now_ns(void);
+static char preload_host[OCW_DOMAIN_MAX + 1];  // (the fetches' host: the domain, or the self-test's)
+static volatile bool preload_stopped;
+static volatile uint32_t served_id;  // the file the last answer of ours was
+static int not_seen;                 // files held that the game's download went past
+
+static void preload_reset(void) {
+    cp_clear("backend restart");
+    preload_stopped = false, served_id = 0, not_seen = 0;
+}
+
+static const char *preload_domain(void) {
+    if (!g_ocw.active || !g_mod.preload || preload_stopped) return NULL;
+    if (g_ocw.ip[0]) {
+        static bool said;
+        if (!said) said = true, LOG("[ocw] next-course preload off: \"ip\" is set in ocw-config.json\n");
+        return NULL;
+    }
+    return g_ocw.domain;
+}
+
+static uint8_t *ocw_fetch(uint32_t id, size_t *len) {  // (the preload's thread)
+    char url[128];
+    snprintf(url, sizeof url, "http://%s/level_data/%u", preload_host, id);
+    HttpResponse r;
+    int st = http_request("GET", url, "Accept: */*\r\n", NULL, 0, OCW_PRELOAD_TIMEOUT_MS, &r);
+    if (st != 200) {
+        MLOG("ocw: preload GET /level_data/%u: %s%d\n", id, st ? "HTTP " : r.error, st);
+        http_free(&r);
+        return NULL;
+    }
+    *len = r.len;
+    return (uint8_t *)r.body;  // (the preload frees it)
+}
+
+static int joined_ms, state_before;
+
+void ocw_preload_before(uint32_t id) {  // (endless.c: before the game's own GetObject)
+    served_id = 0, joined_ms = -1, state_before = CP_NONE;
+    if (!preload_domain()) return;
+    state_before = cp_state(id, CP_FILE);
+    if (state_before == CP_QUEUED || state_before == CP_LOADING)
+        joined_ms = cp_wait(id, CP_FILE, OCW_PRELOAD_TIMEOUT_MS + 2000);
+}
+
+void ocw_preload_after(uint32_t id, bool ok) {  // (... and after it)
+    const char *host = preload_domain();
+    if (!host) return;
+    char code[12];
+    data_id_to_code(id, code);
+    int st = cp_state(id, CP_FILE);
+    if (served_id == id && joined_ms >= 0) MLOG("ocw: GetObject %s: preloaded, joined after %d ms\n", code, joined_ms);
+    else if (served_id == id) MLOG("ocw: GetObject %s: preloaded\n", code);
+    else if (st == CP_READY && ok) {  // (held, and the game downloaded it some other way)
+        LOG("[ocw] GetObject %s: the game's own download (not GET http://%s/level_data/<id>)\n", code, host);
+        if (++not_seen >= 2) {
+            preload_stopped = true;
+            cp_clear("not used");
+            LOG("[ocw] next-course preload off for this session: the game downloads its courses another way\n");
+            return;
+        }
+    } else {
+        MLOG("ocw: GetObject %s: the game's own download (%s)\n", code,
+             state_before == CP_NONE ? "not preloaded" : st == CP_FAILED ? "its preload failed"
+             : st == CP_READY ? "the game's request failed" : "its preload didn't end");
+    }
+    snprintf(preload_host, sizeof preload_host, "%s", host);
+    cp_after(id, CP_FILE, ocw_fetch);
+}
+
+// runtime/services/bsd_host.c: a plain-HTTP request of the game's, on port 80 of the OCW host (the only one its sockets
+// may reach with backend ocw)
+bool game_http_answer(uint32_t ip, uint16_t port, const void *req, size_t len, uint8_t **resp, size_t *resp_len) {
+    (void)ip;
+    const char *host = port == 80 ? preload_domain() : NULL;
+    uint32_t id = 0;
+    if (!host || !cp_http_answer(host, (const char *)req, len, resp, resp_len, &id)) return false;
+    served_id = id;
+    return true;
+}
+
+// RECOMP_MOD_PRELOAD_TEST_OCW=<domain>/<data id> (tests, any backend, no account): the preload's own path for one
+// public course file, at start-up on a thread of its own: the fetch, the checks, the cache, the answer the game's
+// GET would get (twice: the second must miss). One log line with the outcome.
+static void *self_test(void *arg) {
+    const char *spec = arg;
+    const char *slash = strrchr(spec, '/');
+    uint32_t id = slash ? (uint32_t)strtoul(slash + 1, NULL, 10) : 0;
+    if (!id || slash - spec > OCW_DOMAIN_MAX) { LOG("[ocw] preload self-test: <domain>/<data id>\n"); return NULL; }
+    char host[OCW_DOMAIN_MAX + 1];
+    snprintf(host, sizeof host, "%.*s", (int)(slash - spec), spec);
+    snprintf(preload_host, sizeof preload_host, "%s", host);
+    uint32_t ids[2] = {id - 1, id};
+    cp_set_list(ids, 2, 0);
+    uint64_t t0 = plat_now_ns();
+    cp_after(id - 1, CP_FILE, ocw_fetch);
+    cp_wait(id, CP_FILE, OCW_PRELOAD_TIMEOUT_MS + 2000);
+    int st = cp_state(id, CP_FILE);
+    unsigned ms = (unsigned)((plat_now_ns() - t0) / 1000000);
+    char req[256];
+    int n = snprintf(req, sizeof req, "GET /level_data/%u HTTP/1.1\r\nHost: %s\r\nUser-Agent: test\r\n\r\n", id, host);
+    uint8_t *r = NULL, *r2 = NULL;
+    size_t rl = 0, rl2 = 0;
+    uint32_t got = 0;
+    bool a1 = cp_http_answer(host, req, (size_t)n, &r, &rl, &got);
+    bool a2 = cp_http_answer(host, req, (size_t)n, &r2, &rl2, NULL);
+    const uint8_t *body = a1 ? (const uint8_t *)strstr((const char *)r, "\r\n\r\n") + 4 : NULL;
+    bool body_ok = body && rl - (size_t)(body - r) == CP_FILE_SIZE && cp_valid(CP_FILE, body, CP_FILE_SIZE);
+    LOG("[ocw] preload self-test %s/%u: %s in %u ms; answer %s (%zu bytes, file %s, id %u); again %s: %s\n", host, id,
+        st == CP_READY ? "held" : st == CP_FAILED ? "FAILED" : "not held", ms, a1 ? "yes" : "no", rl,
+        body_ok ? "valid" : "INVALID", got, a2 ? "yes" : "no",
+        st == CP_READY && a1 && body_ok && !a2 ? "PASS" : "FAIL");
+    free(r), free(r2);
+    cp_clear("self-test");
+    return NULL;
+}
+
+static void preload_self_test(void) {
+    static bool once;
+    const char *spec = getenv("RECOMP_MOD_PRELOAD_TEST_OCW");
+    if (!spec || !*spec || once) return;
+    once = true;
+    pthread_t th;
+    if (pthread_create(&th, NULL, self_test, (void *)spec) == 0) pthread_detach(th);
+}
 
 // ---- Play History (My Info and a maker's page): the game's own GetUsers record comes from OCW's NEX side with no play
 // statistics, so they are filled in from OCW's REST API: the maker's own totals, GET https://<domain>/api/makers/<id>

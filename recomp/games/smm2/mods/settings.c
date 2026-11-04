@@ -14,6 +14,8 @@
 //                                                   World, the Endless Challenge and 100 Mario while the game's NEX
 //                                                   client logs in to the backend: hybrid; nextendo's default) or
 //                                                   backend (all of Course World from the backend; hybrid.h)
+//   RECOMP_MOD_PRELOAD=0         preload=0          don't fetch the next Endless courses ahead (on by default;
+//                                                   course_preload.h)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +43,7 @@ static void set(const char *key, const char *val) {
     else if (!strcmp(key, "timeout_ms")) g_mod.timeout_ms = atoi(val);
     else if (!strcmp(key, "log")) g_mod.log = atoi(val) != 0;
     else if (!strcmp(key, "challenge_mode")) g_mod.mode_endless = !strcmp(val, "endless");
+    else if (!strcmp(key, "preload")) g_mod.preload = atoi(val) != 0;
 }
 
 void mod_settings_load(void) {
@@ -56,6 +59,7 @@ void mod_settings_load(void) {
     g_mod.hundred = true;
     snprintf(g_mod.courses, sizeof g_mod.courses, "tgrcode");
     g_mod.timeout_ms = 8000;
+    g_mod.preload = true;
     FILE *f = fopen(getenv("RECOMP_MOD_INI") ? getenv("RECOMP_MOD_INI") : "smm2mods.ini", "r");
     if (f) {
         char line[512];
@@ -72,6 +76,7 @@ void mod_settings_load(void) {
         {"RECOMP_MOD_100MARIO", "hundred"}, {"RECOMP_MOD_SERVER", "server"}, {"RECOMP_MOD_TOKEN", "token"},
         {"RECOMP_MOD_RULESET", "ruleset"},  {"RECOMP_MOD_TIMEOUT_MS", "timeout_ms"}, {"RECOMP_MOD_LOG", "log"},
         {"RECOMP_MOD_COURSES", "courses"},  {"RECOMP_MOD_COURSE_WORLD", "course_world"},
+        {"RECOMP_MOD_PRELOAD", "preload"},
     };
     for (size_t i = 0; i < sizeof envs / sizeof *envs; i++)
         if (getenv(envs[i].env)) set(envs[i].key, getenv(envs[i].env));
@@ -79,6 +84,8 @@ void mod_settings_load(void) {
     while (n && g_mod.server[n - 1] == '/') g_mod.server[--n] = 0;
     if (strcmp(g_mod.ruleset, "smm2") && strcmp(g_mod.ruleset, "hundred")) snprintf(g_mod.ruleset, sizeof g_mod.ruleset, "hundred");
     if (g_mod.timeout_ms <= 0) g_mod.timeout_ms = 8000;
+    extern volatile bool cp_verbose;  // (course_preload.c: its fetches and hits in the log too)
+    cp_verbose = g_mod.log;
     if (strcmp(g_mod.courses, "tgrcode")) snprintf(g_mod.courses, sizeof g_mod.courses, "server");
     smm2_session = g_mod.mode_endless;  // (the mode used last: its rules from the first menu request on)
     HyMode m = hy_mode(net_backend(), g_mod.hundred, g_mod.course_world);
@@ -155,7 +162,7 @@ bool net_pretend_online(void) { return mod_answers_login() || (getenv("RECOMP_PR
 // off: SMM2's own Endless Challenge, against our server under SMM2's rules); costumes, mid-air shell jumps and
 // overlapping pipes will follow.
 typedef struct { const char *label, *desc; bool *value; bool def; } GameModToggle;
-static bool t_hundred = true, t_tgrcode;
+static bool t_hundred = true, t_tgrcode, t_preload = true;
 static bool t_costumes;  // (mods/costume.c)
 bool costumes_setting(void);
 void costumes_set_setting(bool on);
@@ -200,6 +207,11 @@ static int mod_toggles(const GameModToggle **out) {
          "(no account needed). Off: the course server set in smm2mods.ini (server=, token=). Takes effect at the "
          "next start.",
          &t_tgrcode, false},
+        {"Preload the next course",
+         "While a course of the Endless Challenge or 100 Mario Challenge is played, the next courses are "
+         "downloaded in the background, so a skip or a clear goes on without the wait. Works with your server, "
+         "TGRCode and OpenCourse World. Takes effect at once.",
+         &t_preload, true},
         // (the backend, incl. OpenCourse World, is the Online section's: runtime/ui/online_rows.mm. OCW's domain
         // and token are its own rows: mods/ocw.c game_mod_rows)
         // (costumes: mods/costume.c)
@@ -214,6 +226,7 @@ static int mod_toggles(const GameModToggle **out) {
     t_hundred = !strcmp(g_mod.ruleset, "hundred");
     t_tgrcode = !strcmp(g_mod.courses, "tgrcode");
     t_costumes = costumes_setting();
+    t_preload = g_mod.preload;
     *out = toggles;
     return (int)(sizeof toggles / sizeof *toggles);
 }
@@ -226,6 +239,11 @@ static void mod_toggles_changed(void) {
     if (strcmp(courses, g_mod.courses)) {  // (the server in use stays until the next start)
         mod_ini_set("courses", courses);
         LOG("[mod] courses from %s at the next start\n", t_tgrcode ? "TGRCode" : "your server");
+    }
+    if (t_preload != g_mod.preload) {
+        g_mod.preload = t_preload;
+        mod_ini_set("preload", t_preload ? "1" : "0");
+        LOG("[mod] preload the next course %s\n", t_preload ? "on" : "off");
     }
 
     costumes_set_setting(t_costumes);
@@ -266,7 +284,7 @@ static const struct { const char *name; const char *labels[8]; } GROUPS[] = {
       "Fire Flower wall climb"}},
     {"SMM1 Course Maker", {"Overlapping pipes"}},
     {"Look and sound", {"SMW goal wipe", "Full death fanfare", "SMM1 title letters"}},
-    {"Courses", {"Courses:", "No word filter", "Play courses the game calls broken"}},
+    {"Courses", {"Courses:", "Preload the next course", "No word filter", "Play courses the game calls broken"}},
 };
 static int group_of(const char *label) {
     for (size_t g = 0; g < sizeof GROUPS / sizeof *GROUPS; g++)

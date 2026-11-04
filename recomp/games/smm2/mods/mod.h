@@ -28,6 +28,8 @@ typedef struct {
     char course_world[16];  // RECOMP_MOD_COURSE_WORLD / course_world=: with another backend than ours, who answers
                             // Course World: "mod" or "backend" ("" unset: nextendo -> the mod; hybrid.h)
     bool courses_set;    // courses= was given (ini or environment); unset, hybrid takes its courses from TGRCode
+    bool preload;        // RECOMP_MOD_PRELOAD / preload=: the next Endless courses are fetched ahead (default on;
+                         // course_preload.h)
 } ModSettings;
 extern ModSettings g_mod;
 void mod_settings_load(void);   // once (idempotent)
@@ -41,6 +43,7 @@ bool mod_smm2_session(void);    // Challenge Modes is on SMM2's own Endless Chal
 void mod_set_smm2_session(bool on);
 void mod_remember_mode(bool endless);  // Challenge Modes' mode, kept in smm2mods.ini (challenge_mode=)
 #define MLOG(...) do { if (g_mod.log) LOG("[mod] " __VA_ARGS__); } while (0)
+void mod_timing(const char *what);  // endless.c: "timing: <what> @<s>" in the log (the mod's log switch)
 
 // ---- server calls (server.c): JSON over HTTP; NULL on any failure (logged)
 typedef struct Json Json;

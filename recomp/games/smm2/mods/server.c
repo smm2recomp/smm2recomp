@@ -39,10 +39,15 @@ static void watch_start(void) {
     pthread_t t;
     if (pthread_create(&t, NULL, slow_watch, NULL) == 0) pthread_detach(t);
 }
+static pthread_once_t watch_once = PTHREAD_ONCE_INIT;
 void srv_waited(bool on) {
-    static pthread_once_t once = PTHREAD_ONCE_INIT;
-    pthread_once(&once, watch_start);
+    pthread_once(&watch_once, watch_start);
     t_waited = on;
+}
+// ... and a wait on something else the game waits on (a preload's fetch under way: course_preload.h)
+void srv_wait_notice(bool on) {
+    pthread_once(&watch_once, watch_start);
+    g_wait_since = on ? plat_now_ns() : 0;
 }
 
 static int request_typed(const char *method, const char *path, const char *body, size_t blen, const char *type,

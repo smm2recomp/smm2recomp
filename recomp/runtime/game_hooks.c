@@ -112,6 +112,11 @@ WEAK bool game_net_config(const char *key, char *out, size_t cap) {
     return false;
 }
 WEAK void game_net_config_set(const char *key, const char *val) { (void)key, (void)val; }
+// ... and a plain-HTTP request of the game's answered by its mods (runtime/services/bsd_host.c): none
+WEAK bool game_http_answer(uint32_t ip, uint16_t port, const void *req, size_t len, uint8_t **resp, size_t *resp_len) {
+    (void)ip, (void)port, (void)req, (void)len, (void)resp, (void)resp_len;
+    return false;
+}
 
 // ---- save data written by the game (runtime/services/fs.c)
 WEAK void flags_ext_save_written(const char *path, uint64_t addr, int64_t off, int64_t size) {

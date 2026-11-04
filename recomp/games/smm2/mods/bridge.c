@@ -673,10 +673,12 @@ static void course_scene(const char *why) {
     if (test_difficulty() < 0) hundred_flow_course_in();
 }
 static void play_list_download(Cpu *c) {
+    mod_timing("state cCourseListDownLoad");
     course_scene("course list");
     guest_call_orig(c, PLAY_LIST_DOWNLOAD_ENTER);
 }
 static void play_data_download(Cpu *c) {
+    mod_timing("state cCourseDataDownLoad");
     course_scene("course data");
     guest_call_orig(c, PLAY_DATA_DOWNLOAD_ENTER);
 }
