@@ -739,6 +739,9 @@ static void tab_audio(void) {
     opt_toggle("Reverb", &g_settings.reverb, true, "The game's reverb effect.");
     opt_toggle("Movie audio", &g_settings.movie_audio, true,
                "Sound in the game's movies. Applies the next time a movie starts.");
+    opt_toggle("Mute in background", &g_settings.mute_in_background, false,
+               "Silences the game while its window is not in front (another app has focus, or it is minimized) or "
+               "the app is in the background. The game keeps running; the sound fades back when you return.");
     opt_end();
 }
 

@@ -545,6 +545,13 @@ build/test_course_preload: tools/test_course_preload.c games/smm2/mods/course_pr
 test-course-preload: build/test_course_preload
 	./build/test_course_preload
 
+# Audio > Mute in background: the target gain and its fade (runtime/services/bg_mute.h), no game files
+build/test_bg_mute: tools/test_bg_mute.c runtime/services/bg_mute.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -o $@ tools/test_bg_mute.c -lm
+test-bg-mute: build/test_bg_mute
+	./build/test_bg_mute
+
 # Shader compile-ahead alone: scan a RomFS folder, translate, compile (tools/test_shader_ahead.m)
 build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c runtime/nvn/shader_ahead.h runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/nvn/maxwell/shader.h runtime/zstd_lib.c
 	clang -O2 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shader_ahead.m runtime/nvn/shader_ahead.c \
@@ -553,4 +560,4 @@ build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c ru
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui test-title-letters test-course-preload smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui test-title-letters test-course-preload test-bg-mute smm2 run-smm2 package embed-server app app-macos apk install push-data

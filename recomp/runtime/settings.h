@@ -36,6 +36,8 @@ typedef struct {
     float volume;        // master volume, 1 = 100%
     bool reverb;         // room reverb effect
     bool movie_audio;
+    bool mute_in_background;  // silence the output while the window is unfocused / minimized or the app is in the
+                              // background (Audio tab, #76): runtime/services/audio.c, bg_mute.h
     bool show_fps;
     bool show_memory;  // the app's memory use in the corner (menu.mm, platform.h plat_memory_used)
     bool dpad_move;      // the d-pad (and arrow keys) move Link like the stick

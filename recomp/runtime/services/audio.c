@@ -12,6 +12,7 @@
 #include "../hle.h"
 #include "../settings.h"
 #include "../ipc.h"
+#include "bg_mute.h"
 
 // ------------------------------------------------------------------ audren: a CPU mixer modelled on
 // Ryujinx's AudioRenderer (VoiceState / DataSourceHelper / StateUpdater, copies in notes/ryujinx_audio).
@@ -857,11 +858,86 @@ static void render_frame(Renderer *r, float *stereo) {
     }
 }
 
-// Output gain: menu volume times LARECOMP_AUDIO_GAIN (applied live).
-static void apply_gain(SDL_AudioStream *st) {
+// Audio > Mute in background (#76, bg_mute.h): BGM_* flags from SDL's window / app events. An event watch: it runs
+// as the event is sent (iOS: also while the game is held in the background), on whichever thread sends it.
+static _Atomic unsigned g_away;
+static bool SDLCALL away_watch(void *userdata, SDL_Event *e) {
+    (void)userdata;
+    unsigned set = 0, clear = 0;
+    switch (e->type) {
+    case SDL_EVENT_WINDOW_FOCUS_LOST: set = BGM_UNFOCUSED; break;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED: clear = BGM_UNFOCUSED; break;
+    case SDL_EVENT_WINDOW_MINIMIZED: set = BGM_MINIMIZED; break;
+    case SDL_EVENT_WINDOW_RESTORED: case SDL_EVENT_WINDOW_MAXIMIZED: clear = BGM_MINIMIZED; break;
+    case SDL_EVENT_WINDOW_HIDDEN: set = BGM_HIDDEN; break;
+    case SDL_EVENT_WINDOW_SHOWN: clear = BGM_HIDDEN; break;
+    case SDL_EVENT_WILL_ENTER_BACKGROUND: case SDL_EVENT_DID_ENTER_BACKGROUND: set = BGM_BACKGROUND; break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND: clear = BGM_BACKGROUND; break;
+    default: return true;
+    }
+    unsigned was = set ? atomic_fetch_or(&g_away, set) : atomic_fetch_and(&g_away, ~clear);
+    unsigned now = (was | set) & ~clear;
+    if (now != was && g_settings.mute_in_background) LOG("[audio] away 0x%x (event 0x%x)\n", now, (unsigned)e->type);
+    return true;
+}
+
+// LARECOMP_TEST_AWAY=ms:what,... (tests: a hidden run never gets focus) sends those events ms after the first output
+// opened; what = lost / gained / min / restore / hide / show / bg / fg
+static void *away_test_thread(void *arg) {
+    static const struct { const char *name; SDL_EventType type; } ev[] = {
+        {"lost", SDL_EVENT_WINDOW_FOCUS_LOST}, {"gained", SDL_EVENT_WINDOW_FOCUS_GAINED},
+        {"min", SDL_EVENT_WINDOW_MINIMIZED}, {"restore", SDL_EVENT_WINDOW_RESTORED},
+        {"hide", SDL_EVENT_WINDOW_HIDDEN}, {"show", SDL_EVENT_WINDOW_SHOWN},
+        {"bg", SDL_EVENT_WILL_ENTER_BACKGROUND}, {"fg", SDL_EVENT_DID_ENTER_FOREGROUND}};
+    uint64_t t0 = SDL_GetTicksNS();
+    for (const char *p = arg; p && *p;) {
+        long ms;
+        char what[16];
+        if (sscanf(p, "%ld:%15[a-z]", &ms, what) != 2) break;
+        uint64_t at = t0 + (uint64_t)ms * 1000000ull, t = SDL_GetTicksNS();
+        if (at > t) SDL_DelayNS(at - t);
+        for (size_t i = 0; i < sizeof ev / sizeof *ev; i++)
+            if (!strcmp(what, ev[i].name)) {
+                SDL_Event e = {0};
+                e.type = ev[i].type;
+                LOG("[audio] test event %s\n", what);
+                SDL_PushEvent(&e);
+            }
+        p = strchr(p, ',');
+        if (p) p++;
+    }
+    return NULL;
+}
+
+static void away_init(void) {  // (once, from the first output: renderer or audout)
+    static atomic_flag done = ATOMIC_FLAG_INIT;
+    if (atomic_flag_test_and_set(&done)) return;
+#if !defined(SDL_PLATFORM_IOS) && !defined(SDL_PLATFORM_ANDROID)
+    if (!SDL_GetKeyboardFocus()) atomic_fetch_or(&g_away, BGM_UNFOCUSED);  // (desktop: started unfocused, e.g. open -g)
+#endif
+    SDL_AddEventWatch(away_watch, NULL);
+    const char *t = getenv("LARECOMP_TEST_AWAY");
+    pthread_t th;
+    if (t && *t && !pthread_create(&th, NULL, away_test_thread, (void *)t)) pthread_detach(th);
+}
+
+// The background mute's gain for the calling output thread (its own fade; who: the log's tag)
+static float away_gain(const char *who) {
+    static _Thread_local BgFade fade;
+    static _Thread_local float logged = 1;
+    float target = bgmute_target(g_settings.mute_in_background, atomic_load_explicit(&g_away, memory_order_relaxed));
+    float g = bgmute_step(&fade, target, SDL_GetTicksNS());
+    if ((g == 0 || g == 1) && g != logged)
+        logged = g, LOG("[%s] background mute: %s\n", who, g ? "sound back" : "silent");
+    return g;
+}
+
+// Output gain: menu volume times LARECOMP_AUDIO_GAIN times the background mute's fade (applied live). SDL applies a
+// stream's gain as the device pulls from it, so the change reaches the audio already queued too.
+static void apply_gain(SDL_AudioStream *st, float away) {
     static double env = -1;
     if (env < 0) env = getenv("LARECOMP_AUDIO_GAIN") ? atof(getenv("LARECOMP_AUDIO_GAIN")) : 1.0;
-    float g = (float)(env * g_settings.volume);
+    float g = (float)(env * g_settings.volume) * away;
     if (st && SDL_GetAudioStreamGain(st) != g) SDL_SetAudioStreamGain(st, g);
 }
 
@@ -914,7 +990,8 @@ static void *renderer_tick(void *arg) {
         pthread_mutex_unlock(&r->lock);
         extern void game_audio_mix(float *stereo, int n, int rate);  // a game's own sounds mixed in (game_hooks.c)
         game_audio_mix(out, (int)N, (int)r->sample_rate);
-        if (r->stream) { apply_gain(r->stream); SDL_PutAudioStreamData(r->stream, out, frame_bytes); }
+        float away = away_gain("audren");  // (also without a device: LARECOMP_NO_AUDIO test runs log the fade)
+        if (r->stream) { apply_gain(r->stream, away); SDL_PutAudioStreamData(r->stream, out, frame_bytes); }
         if (r->wav && r->state == 0) {
             fwrite(out, 1, frame_bytes, r->wav);
             r->wav_bytes += frame_bytes;
@@ -1228,6 +1305,7 @@ static void request_update(Renderer *r, IpcReq *req, IpcResp *resp) {
 }
 
 static void renderer_open_output(Renderer *r) {
+    away_init();
     if (getenv("LARECOMP_AUDIO_WAV")) {
         r->wav = fopen(getenv("LARECOMP_AUDIO_WAV"), "wb");
         if (r->wav) wav_header(r->wav, 0);
@@ -1422,7 +1500,7 @@ static void *audout_thread(void *arg) {
         if (!size) { struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL); continue; }
         uint64_t frames = size / (2 * ch);
         if (a->stream) {
-            apply_gain(a->stream);
+            apply_gain(a->stream, away_gain("audout"));
             if (data) SDL_PutAudioStreamData(a->stream, (const void *)(uintptr_t)data, (int)size);
             while (SDL_GetAudioStreamQueued(a->stream) > target && !a->quit) { struct timespec ts = {0, 1000000}; nanosleep(&ts, NULL); }
         } else {
@@ -1534,6 +1612,7 @@ SERVICE("audout:u", audout_u) {
                 SDL_ResumeAudioStreamDevice(a->stream);
             }
         }
+        away_init();
         pthread_create(&a->thread, NULL, audout_thread, a);
         audio_track(NULL, a);
         IpcBuf *b = out_buf(req, 0);

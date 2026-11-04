@@ -99,6 +99,7 @@ void settings_load(void) {
         else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
         else if (!strcmp(key, "reverb")) g_settings.reverb = atoi(val) != 0;
         else if (!strcmp(key, "movie_audio")) g_settings.movie_audio = atoi(val) != 0;
+        else if (!strcmp(key, "mute_in_background")) g_settings.mute_in_background = atoi(val) != 0;
         else if (!strcmp(key, "skip_intro")) g_settings.skip_intro = atoi(val) != 0;
         else if (!strcmp(key, "show_fps")) g_settings.show_fps = atoi(val) != 0;
         else if (!strcmp(key, "show_memory")) g_settings.show_memory = atoi(val) != 0;
@@ -168,6 +169,7 @@ void settings_save(void) {
     fprintf(f, "volume = %.2f\n", g_settings.volume);
     fprintf(f, "reverb = %d\n", g_settings.reverb);
     fprintf(f, "movie_audio = %d\n", g_settings.movie_audio);
+    fprintf(f, "mute_in_background = %d\n", g_settings.mute_in_background);
     fprintf(f, "skip_intro = %d\n", g_settings.skip_intro);
     fprintf(f, "show_fps = %d\n", g_settings.show_fps);
     fprintf(f, "show_memory = %d\n", g_settings.show_memory);
