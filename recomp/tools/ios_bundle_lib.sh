@@ -58,6 +58,9 @@ ios_icons() {
     local icons
     icons="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/docs/branding/ios"
     mkdir -p "$out"
+    # (absolute: actool hands the job to a shared agent that resolves a relative path against its own directory - another
+    # build's, when one ran actool first - and fails with "the output directory does not exist")
+    out=$(cd "$out" && pwd)
     if xcrun --find actool >/dev/null 2>&1; then
         work=$(mktemp -d)
         aset=$work/Assets.xcassets/AppIcon.appiconset
