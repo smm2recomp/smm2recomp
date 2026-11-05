@@ -98,6 +98,16 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k ci "$RUNNER_TEMP/ci.keychain"
           security list-keychains -d user -s "$RUNNER_TEMP/ci.keychain" login.keychain
           rm "$RUNNER_TEMP/cert.p12"
+      - name: iOS kit (the Mac app's "Build for iPhone / iPad")
+        working-directory: recomp
+        env:
+          IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+        run: |
+          xcrun --sdk iphoneos --show-sdk-path || { echo "::error::this runner's Xcode has no iOS SDK"; exit 1; }
+          tools/build_deps_ios.sh
+          make TARGET=ios-arm64 GAME=smm2 embed-server
+          make -j"$(sysctl -n hw.ncpu)" TARGET=ios-arm64 GAME=smm2 DEPS="$PWD/build/deps-ios" RECOMP_VERSION="${GITHUB_REF_NAME}" ios-kit
+          tools/test_ios_kit.sh build/ios-kit
       - name: macOS arm64 (.app)
         working-directory: recomp
         env:

@@ -42,6 +42,12 @@ strip -S "$C/MacOS/${ID}recomp"  # (debug-map entries only: the symbols crash re
 stage_common "$C/Resources" "$TARGET" "$ZT"
 [ -f "$DEPS/share/licenses/SDL3/LICENSE.txt" ] && cp "$DEPS/share/licenses/SDL3/LICENSE.txt" "$C/Resources/licenses/LICENSE-SDL3.txt"
 write_readme "$C/Resources/README.txt" "$TARGET" "$VERSION"
+# the iOS kit (make TARGET=ios-arm64 ios-kit), when this checkout has one: the setup screen's "Build for iPhone /
+# iPad" builds the player's own iPhone / iPad app from it (runtime/iosbuild.c); without it the app has no iPhone section
+if [ -d build/ios-kit ]; then
+    cp -R build/ios-kit "$C/Resources/ios-kit"
+    tools/test_ios_kit.sh "$C/Resources/ios-kit" || { echo "$C/Resources/ios-kit: the iOS kit fails its check"; exit 1; }
+fi
 
 # ---- dylibs: copy every non-system dependency, recursively; point all references at @rpath/<name>
 is_system() { case "$1" in /usr/lib/*|/System/*) return 0;; esac; return 1; }
