@@ -988,6 +988,7 @@ static void pass_layout(const ExecState *s, PassLayout *out) {
                       ? vk_format(s->rt.cview[i].format) : base;
         out->samples = b ? b->samples : (t->samples > 1 ? t->samples : 1);
     }
+    while (out->ncolor && out->color[out->ncolor - 1] == VK_FORMAT_UNDEFINED) out->ncolor--;  // (as begin_pass: empty slots at the end dropped)
     NvnTexture *d = s->rt.depth;
     if (d && renderer_format_is_depth(d->format)) {
         const TexBackend *b = d->backend;
@@ -1053,6 +1054,20 @@ static void begin_pass(void) {
         if (ew < minw) minw = ew;
         if (eh < minh) minh = eh;
         pass_samples = b->samples;
+    }
+    // Empty color slots at the end are left out of the pass (and so its pipelines): Intel's Windows driver for 6th-10th
+    // gen graphics (31.0.101.2115) crashes in vkCmdBeginRendering on a slot without a view, which the spec allows (#60).
+    // The game's writes there went nowhere anyway. A pass with no color target left is a depth-only one.
+    while (pass_ncolor && !ca[pass_ncolor - 1].imageView) pass_ncolor--;
+    {
+        static bool said_trail, said_gap;
+        bool gap = false;
+        for (uint32_t i = 0; i < pass_ncolor; i++) gap |= !ca[i].imageView;
+        if (!said_trail && pass_ncolor < (uint32_t)st.rt.ncolor) {
+            said_trail = true;
+            LOG("[vk] a pass with %d color targets, %u in use: the empty ones left out\n", st.rt.ncolor, pass_ncolor);
+        }
+        if (!said_gap && gap) { said_gap = true; LOG("[vk] a pass with an empty color slot between %u targets\n", pass_ncolor); }
     }
     pass_depth = pass_stencil = VK_FORMAT_UNDEFINED;
     bool has_d = false, has_s = false;
