@@ -435,6 +435,18 @@ app: $(EXE)
 	$(if $(IOS),,$(error app: pass TARGET=ios-arm64 | iossim-arm64))
 	tools/make_ios_app.sh $(PLATFORM) $(EXE) $(APP)
 
+# iOS: the kit the Mac app builds players' iPhone / iPad apps from (no game code: runtime/iosbuild.c compiles that on
+# the player's Mac and links it with this): build/ios-kit, tools/make_ios_kit.sh. libtool, not ar: ar would keep only
+# one of two objects with the same name.
+IOS_KIT  := build/ios-kit
+ios-kit: $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ)
+	$(if $(filter ios,$(PLATFORM)),,$(error ios-kit: pass TARGET=ios-arm64))
+	@mkdir -p $(B)/kit
+	rm -f $(B)/kit/libsmm2rt.a && xcrun libtool -static -no_warning_for_no_symbols -o $(B)/kit/libsmm2rt.a $^ 2> $(B)/kit/libtool.log || { cat $(B)/kit/libtool.log; exit 1; }
+	printf '%s\n' $(filter-out -L% -lSDL3 %.a,$(LDFLAGS)) > $(B)/kit/link.txt
+	printf '%s\n' $(filter-out -I%,$(GENFLAGS)) $(GAMEDEFS) > $(B)/kit/game_cflags.txt
+	RECOMP_VERSION=$(RECOMP_VERSION) tools/make_ios_kit.sh $(IOS_KIT) $(B)/kit $(SDL) $(GAMELIB_ID) $(if $(filter 1,$(EMBED_SERVER)),$(EMBED_LIB))
+
 # Android: the APK around libmain.so + the game code library (SDL's Java activity, manifest, debug-signed:
 # tools/make_android_apk.sh); `install` puts it on the device adb sees (ADB_SERIAL=<serial> to pick one), `push-data`
 # copies the game files there (tools/android_push_data.sh; PUSH_INTERNAL=1: into the app's internal folder, for a
@@ -481,7 +493,7 @@ run: all
 gen-objs: $(GEN_OBJ)
 
 # Runtime objects only (no generated code, no link): quick compile check, needs no game files
-runtime-objs: $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ)
+runtime-objs: $(RT_OBJ) $(MBEDTLS_OBJ) $(BACKEND_OBJ) $(UI_OBJ) $(IMGUI_OBJ)
 
 # Recompiler unit tests (no game files)
 test-tools:
@@ -560,4 +572,4 @@ build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c ru
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
 
-.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui test-title-letters test-course-preload test-bg-mute smm2 run-smm2 package embed-server app app-macos apk install push-data
+.PHONY: all venv setup gen clean-gen run gen-objs runtime-objs test-tools test-buildsync test-framegen test-ui test-title-letters test-course-preload test-bg-mute smm2 run-smm2 package embed-server app ios-kit app-macos apk install push-data

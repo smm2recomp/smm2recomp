@@ -11,86 +11,18 @@
 # 3+ GB the game uses. A wildcard profile has neither: the app then installs but stops at start ("guest memory not
 # reserved"). The Simulator needs no profile.
 set -euo pipefail
+. "$(dirname "$0")/ios_bundle_lib.sh"  # (ios_info_plist, ios_icons)
 PLAT=$1 EXE=$2 APP=$3
 NAME=SMM2Recomp
 BUNDLE_ID=${RECOMP_IOS_BUNDLE_ID:-org.smcraft.smm2recomp}
 VERSION=3.0.3
 BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 1)
-if [ "$PLAT" = iossim ]; then sdk=iphonesimulator; platform=iPhoneSimulator; else sdk=iphoneos; platform=iPhoneOS; fi
 rm -rf "$APP"
 mkdir -p "$APP"
 cp "$EXE" "$APP/$NAME"
-cat > "$APP/Info.plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleDevelopmentRegion</key><string>en</string>
-    <key>CFBundleExecutable</key><string>$NAME</string>
-    <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-    <key>CFBundleName</key><string>$NAME</string>
-    <key>CFBundleDisplayName</key><string>$(sed -n 's/^GAME_MOBILE_TITLE *:= *//p' games/smm2/game.mk)</string>
-    <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>$VERSION</string>
-    <key>CFBundleVersion</key><string>$BUILD</string>
-    <key>CFBundleSupportedPlatforms</key><array><string>$platform</string></array>
-    <key>DTPlatformName</key><string>$sdk</string>
-    <key>MinimumOSVersion</key><string>17.0</string>
-    <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
-    <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
-    <key>UILaunchScreen</key><dict/>
-    <key>UIRequiresFullScreen</key><true/>
-    <key>UIStatusBarHidden</key><true/>
-    <key>UIViewControllerBasedStatusBarAppearance</key><false/>
-    <key>UIApplicationSupportsIndirectInputEvents</key><true/>
-    <key>UIApplicationSceneManifest</key>
-    <dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
-    <key>UISupportedInterfaceOrientations</key>
-    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
-    <key>UISupportedInterfaceOrientations~ipad</key>
-    <array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
-    <!-- Documents (extracted/, fonts/, sysdata/, saves, settings, caches) in the Files app and Finder -->
-    <key>UIFileSharingEnabled</key><true/>
-    <key>LSSupportsOpeningDocumentsInPlace</key><true/>
-    <key>GCSupportsControllerUserInteraction</key><true/>
-    <key>GCSupportedGameControllers</key>
-    <array><dict><key>ProfileName</key><string>ExtendedGamepad</string></dict></array>
-    <key>CADisableMinimumFrameDurationOnPhone</key><true/>
-</dict>
-</plist>
-EOF
-plutil -lint "$APP/Info.plist" >/dev/null
+ios_info_plist "$APP/Info.plist" "$BUNDLE_ID" "$VERSION" "$BUILD" "$PLAT"
 printf 'APPL????' > "$APP/PkgInfo"
-# The app icon (docs/branding, tools/make_icons.sh): an asset catalog compiled by actool (Xcode's command line tools:
-# Assets.car plus the home-screen PNGs and the Info.plist keys) from the 1024 master size; without actool the PNGs
-# alone, named in CFBundleIcons.
-icons="$(cd "$(dirname "$0")/../.." && pwd)/docs/branding/ios"
-if xcrun --find actool >/dev/null 2>&1; then
-    work=$(mktemp -d)
-    aset=$work/Assets.xcassets/AppIcon.appiconset
-    mkdir -p "$aset"
-    cp "$icons/AppIcon1024x1024.png" "$aset/icon-1024.png"
-    printf '%s\n' '{"images":[{"filename":"icon-1024.png","idiom":"universal","platform":"ios","size":"1024x1024"}],' \
-        '"info":{"author":"xcode","version":1}}' > "$aset/Contents.json"
-    printf '%s\n' '{"info":{"author":"xcode","version":1}}' > "$work/Assets.xcassets/Contents.json"
-    xcrun actool --compile "$APP" --platform "$sdk" --minimum-deployment-target 17.0 --target-device iphone \
-        --target-device ipad --app-icon AppIcon --output-partial-info-plist "$work/icon.plist" \
-        --output-format human-readable-text "$work/Assets.xcassets" > "$work/actool.log" 2>&1 ||
-        { cat "$work/actool.log" >&2; exit 1; }
-    /usr/libexec/PlistBuddy -c "Merge $work/icon.plist" "$APP/Info.plist" >/dev/null
-    rm -rf "$work"
-else
-    cp "$icons"/AppIcon*.png "$APP/"
-    /usr/libexec/PlistBuddy -c 'Add :CFBundleIcons dict' -c 'Add :CFBundleIcons:CFBundlePrimaryIcon dict' \
-        -c 'Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles array' \
-        -c 'Add :CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60' \
-        -c 'Add :CFBundleIcons~ipad dict' -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon dict' \
-        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles array' \
-        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:0 string AppIcon60x60' \
-        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:1 string AppIcon76x76' \
-        -c 'Add :CFBundleIcons~ipad:CFBundlePrimaryIcon:CFBundleIconFiles:2 string AppIcon83.5x83.5' "$APP/Info.plist"
-fi
+ios_icons "$APP" "$APP/Info.plist" "$PLAT"
 # RECOMP_IOS_DATA=<data folder> (e.g. private/smm2): the game files go into the app as data/ (extracted/exefs and
 # romfs, fonts, sysdata; runtime/paths.c links them into Documents), so a device needs nothing copied by hand - for
 # your own device only: such an app holds the game. Staged next to the app once (rsync), then cloned into each new
