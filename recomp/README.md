@@ -157,16 +157,18 @@ and install).
 
 ## Building (iOS / iPadOS)
 
+Players don't need any of this: the Mac app builds the iPhone / iPad app from their game
+([docs/ios.md](../docs/ios.md); `runtime/iosbuild.c`, from the iOS kit that `make TARGET=ios-arm64 GAME=smm2
+DEPS=build/deps-ios ios-kit` makes and the release's Mac app carries). This section builds it from a checkout.
+
 iOS runs no code it didn't ship with, and there is no compiler on the device, so the game code is built on the Mac
 from your own dump and linked into the app. The app is then signed and installed on your device. The app is made from your dump: it is
 for your own devices only, never to be shared. Metal renderer as on macOS (shaders still translated and compiled at
 run time: `newLibraryWithSource` is allowed), SDL3 built for iOS as a static library, the same arm64 game code as
 macOS (`generated/smm2`).
 
-    # SDL3 for iOS, once: cmake -S SDL3-<ver> -B b -G Ninja -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=iphoneos \
-    #   -DCMAKE_OSX_ARCHITECTURES=arm64 -DSDL_SHARED=OFF -DSDL_STATIC=ON -DCMAKE_INSTALL_PREFIX=<deps>/ios-device
-    #   (and iphonesimulator -> <deps>/ios-sim); then cmake --build b && cmake --install b
-    make -C recomp TARGET=ios-arm64 GAME=smm2 DEPS=<deps>/ios-device app        # build/smm2-ios-arm64/SMM2Recomp.app
+    recomp/tools/build_deps_ios.sh                                              # SDL3 for iOS, once: build/deps-ios
+    make -C recomp TARGET=ios-arm64 GAME=smm2 DEPS=build/deps-ios app            # build/smm2-ios-arm64/SMM2Recomp.app
     make -C recomp TARGET=iossim-arm64 GAME=smm2 DEPS=<deps>/ios-sim app        # the Simulator (ad-hoc signed)
 
 Signing: `RECOMP_IOS_IDENTITY=<codesigning identity> RECOMP_IOS_PROFILE=<.mobileprovision>` (and

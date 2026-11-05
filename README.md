@@ -90,8 +90,9 @@ itself. To update on Windows, unpack the new release over the old folder (replac
 files, saves and settings stay, and setup isn't repeated. On Linux and macOS they're kept outside
 the program, so any copy finds them. The game code is only rebuilt when a release changes it.
 
-Android and iOS / iPadOS have no download: they're built yourself from source
-([recomp/README.md](recomp/README.md)); iOS needs a Mac to build, sign and install the app.
+iPhone and iPad have no download either: the Mac app builds an iPhone / iPad app from your game,
+which you sign and install yourself ([docs/ios.md](docs/ios.md)). Android is built from source
+([recomp/README.md](recomp/README.md)).
 
 ## Troubleshooting
 
@@ -127,14 +128,14 @@ aren't mods of this kind.
 ## Status
 
 **Early development.** Release packages for Windows, Linux and macOS are on the
-[Releases](https://github.com/smm2recomp/smm2recomp/releases) page; iOS / iPadOS and Android are built from
-source.
+[Releases](https://github.com/smm2recomp/smm2recomp/releases) page; the Mac app builds the iOS / iPadOS app
+([docs/ios.md](docs/ios.md)), and Android is built from source.
 
 | Platform | Graphics | Status |
 |---|---|---|
 | **macOS** (Apple Silicon) | Metal | Plays courses. Input replays stay frame-for-frame in sync with the game running in Ryujinx, and in-course frames are pixel-identical in 71 of 90 style × theme combinations. The reference platform. The player app goes from an empty data folder through its setup screen and the first-launch recompile to the title screen. |
 | **macOS** (Intel, x86-64) | Metal | Builds and runs natively on an Intel Mac: the game code uses the portable-C lowering (as on Windows / Linux x64) and the SIMD differential tests pass. Booted to the title at 60 fps and into Course World on a Metal 2-only GPU (NVIDIA GT 755M), which needs the driver limits in [PROGRESS.md](PROGRESS.md) worked around (no ASTC textures, no packed 16-bit colour textures, no swizzle views, no Metal binary archives). MetalFX (the upscaler) needs Apple silicon or a supported GPU: the app falls back to bilinear scaling. |
-| **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built on a Mac and installed on your own device. |
+| **iOS / iPadOS** (arm64) | Metal | Plays at 60 fps on iPad Pro, with an on-screen controller and touch. Built by the Mac app from your game and installed on your own device ([docs/ios.md](docs/ios.md)). |
 | **Windows** (x64) | Vulkan | Testers play the release package; their reports are in [Issues](https://github.com/smm2recomp/smm2recomp/issues). See [docs/windows.md](docs/windows.md). |
 | **Linux** (x64, arm64) | Vulkan | Testers play the release packages (a Steam Deck runs it, slowly so far); arm64 boots to the title screen in a VM. |
 | **Android** (arm64, Android 13+) | Vulkan | Builds an APK on your computer from your dump; boots and plays the title course in the Android emulator. Not yet tested on a real device. |
@@ -204,7 +205,9 @@ make -C recomp run-smm2    # play
 
 - **Windows:** cross-compiled from macOS into a package that recompiles the game from your dump on
   first launch. See [docs/windows.md](docs/windows.md).
-- **iOS / iPadOS, Linux, Android:** see [recomp/README.md](recomp/README.md).
+- **iOS / iPadOS:** the Mac app builds it, see [docs/ios.md](docs/ios.md); building it from source:
+  [recomp/README.md](recomp/README.md).
+- **Linux, Android:** see [recomp/README.md](recomp/README.md).
 
 ### The player packages
 
