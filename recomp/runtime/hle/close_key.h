@@ -1,6 +1,6 @@
 // The iPhone / iPad close shortcut: Control-W or Command-W (W pressed with either, no Shift or Option, not a key
 // repeat). The game takes every key it gets, so iPadOS never sees its own Command-W; runtime/hle/input.c checks this
-// first and closes the app (ios_close_app, runtime/ui/touchpad.mm).
+// first and closes the app: back to the Home Screen with the system fade, then the process ends (ios_close_app, runtime/ui/touchpad.mm).
 #pragma once
 #include <stdbool.h>
 

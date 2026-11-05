@@ -196,19 +196,24 @@ extern "C" void touchpad_draw(float w, float h) {
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
 // Control-W / Command-W (runtime/hle/close_key.h, from runtime/hle/input.c): close the app as iPadOS closes others.
-// The window goes away with the system's animation (the scene's session destroyed); the process then ends, so the
-// next start is a fresh one (SDL's window belonged to the closed scene). (UI thread)
+// UIApplication's suspend goes back to the Home Screen with the system's fade, as the Home gesture does (an exit()
+// alone looked like a force quit); once the app is in the background the process ends, so the next start is a fresh
+// one. (UI thread)
 extern "C" void ios_close_app(void) {
     static bool closing;
     if (closing) return;
     closing = true;
     fprintf(stderr, "[input] Control/Command-W: closing\n");
     UIApplication *app = UIApplication.sharedApplication;
-    UIWindowScene *scene = nil;
-    for (UIScene *s in app.connectedScenes)
-        if ([s isKindOfClass:UIWindowScene.class]) { scene = (UIWindowScene *)s; break; }
-    if (!scene) exit(0);
-    [app requestSceneSessionDestruction:scene.session options:nil errorHandler:^(NSError *) { exit(0); }];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
+    SEL suspend = NSSelectorFromString(@"suspend");
+    if (![app respondsToSelector:suspend]) exit(0);
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil
+                                                     queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
+    }];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+    [app performSelector:suspend];
+#pragma clang diagnostic pop
 }
 #endif
