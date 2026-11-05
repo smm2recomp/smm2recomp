@@ -192,3 +192,23 @@ extern "C" void touchpad_draw(float w, float h) {
         dl->AddText(font, size, ImVec2(p.x - ts.x * 0.5f, p.y - ts.y * 0.5f), text, c.label);
     }
 }
+
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+#import <UIKit/UIKit.h>
+// Control-W / Command-W (runtime/hle/close_key.h, from runtime/hle/input.c): close the app as iPadOS closes others.
+// The window goes away with the system's animation (the scene's session destroyed); the process then ends, so the
+// next start is a fresh one (SDL's window belonged to the closed scene). (UI thread)
+extern "C" void ios_close_app(void) {
+    static bool closing;
+    if (closing) return;
+    closing = true;
+    fprintf(stderr, "[input] Control/Command-W: closing\n");
+    UIApplication *app = UIApplication.sharedApplication;
+    UIWindowScene *scene = nil;
+    for (UIScene *s in app.connectedScenes)
+        if ([s isKindOfClass:UIWindowScene.class]) { scene = (UIWindowScene *)s; break; }
+    if (!scene) exit(0);
+    [app requestSceneSessionDestruction:scene.session options:nil errorHandler:^(NSError *) { exit(0); }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
+}
+#endif
