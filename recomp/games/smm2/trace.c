@@ -122,8 +122,8 @@ void smm2_player_hook(Cpu *c) {
     costume_player_frame(c, self);
     extern void lanky_player_frame(Cpu *c, uint64_t player);  // (mods/lanky.c: Lanky Mario's update)
     lanky_player_frame(c, self);
-    extern void quick_retry_player(uint64_t player);  // (mods/quick_retry.c: the restart after a miss)
-    quick_retry_player(self);
+    extern void quick_retry_player(Cpu *c, uint64_t player);  // (mods/quick_retry.c: the restart after a miss)
+    quick_retry_player(c, self);
     extern void smm1_extras_player_frame(void);  // (mods/smm1_extras.c: a debug log, RECOMP_SMM1_LOG)
     smm1_extras_player_frame();
     if (state == 2) return;

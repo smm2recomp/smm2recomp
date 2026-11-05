@@ -869,6 +869,8 @@ const uint8_t *game_overlay_image(int *w, int *h, int *full, uint64_t *seq) {
         flow_test_open(spec);
     }
     smw_goal_poll();
+    extern void quick_retry_frame(void);  // (mods/quick_retry.c: SMM2's miss cut short while it's fast-forwarded)
+    quick_retry_frame();
     // (the buttons and the touch are followed while the flow is closed too: a button or a touch held when it opens,
     // e.g. the ZL / ZR or the tap that switched to it, is no press of its own)
     unsigned b = (unsigned)input_player_buttons() | test_input(renderer_present_count());

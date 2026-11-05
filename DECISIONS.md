@@ -2216,3 +2216,28 @@ on a device where the formats exist the decoded path is still correct, just slow
 then completed on the GT 755M with fireballs and no abort (2026-10-22).
 **Would change:** a per-pixel-format support query in Metal, or proof that some non-Apple families support the
 formats (all of them are gated on `Apple2` today, so Intel Macs with native RGB565 pay a one-time CPU expansion).
+
+## 2026-11-06 — Quick level return also cuts SMM2's own miss short (revises 2026-10-21)
+
+**Decision:** while a miss is fast-forwarded, the parts of SMM2's miss sequence that only animate or wait end at once:
+the death event's Pose and Fall timers, the scene fade (out and in, the restarted course's own fade in included), the
+scene manager's wait for the master volume's fade out, and in Endless / 100 Mario the lives card's appear animation
+that the CourseIn scene and the card's leave wait for. Done with runtime writes of frame counters and states the game
+reads each frame (`quick_retry.c`, from the player-update hook and the per-frame overlay tick), only in the states they
+end; no new hook points, no change to the game library.
+- **Measured** (M-series Mac): 100 Mario 539 → about 70 frames per miss, about 2.3 s → about 1.1 s; Course World 259 →
+  20 frames, about 2.3 s → about 1 s. What is left is mostly the course's rebuild (one frame, about 0.8 s of the
+  game's own work on a worker thread).
+- **Kept as before:** the miss post (Endless), the lives, the checkpoint and the scene to go to are set at the death
+  event's start and at the scene change, which aren't touched; co-op keeps the others' bubble timing (the Pose is cut
+  only for the last player standing). Checked: 100 Mario through the flow-test stand-in and the real SMM1 flow (lives
+  98 → 85 in 14 misses in a row, restart screenshots clean, the next course's card and fade normal), Course World.
+  Test play couldn't be driven by the test scripts (the editor ignored scripted presses); only the death event's
+  timers apply there (no scene change).
+- **Tried and dropped:** leaving out the draws of hidden frames (15–25% quicker; compute passes then read targets
+  never drawn and the course's colours stayed broken); moving the indirect-call cache out of thread-local storage (no
+  measurable gain).
+**Why:** the owner (2026-11-05): "as fast as possible but also stable", OK with changing SMM2's own miss sequence.
+**Would change:** a mode where one of these writes lands in the wrong state (each is logged: "[quick-retry] ..."), or
+the owner wanting the lives card seen.
+

@@ -1020,9 +1020,22 @@ It applies immediately.
 - **How:** the game plays its own miss (the lost life, the lives card, the course set up again). The frames from
   the death fanfare until the restarted course run as fast as the machine can and aren't shown
   (`runtime/nvn/objects.c` `g_present_hidden`): no display pacing and no window image, but each frame's GPU work,
-  the renderers' per-frame work and the 100 Mario flow's tick still run. Nothing in the game's logic is changed.
-  Lives count as before (100 Mario and Endless: a miss still costs one), and so do clears, checkpoints and skips.
-  Off, the hooks only return.
+  the renderers' per-frame work and the 100 Mario flow's tick still run. Lives count as before (100 Mario and
+  Endless: a miss still costs one), and so do clears, checkpoints and skips. Off, the hooks only return.
+- **Cut short** (2026-11-06): while the miss is fast-forwarded, the parts of SMM2's miss that only animate or wait
+  end at once. No game code is changed: the mod writes frame counters and states the game reads each frame, only in
+  the states they end (addresses and fields in `quick_retry.c`; the research notes are private):
+  - the death event's Pose (45 frames) and Fall (140; 20 in test play): its frame timer. In co-op the Pose is cut
+    only for the last player standing, so the others' bubble keeps its timing;
+  - the scene fade (UISceneFadeSeq page): out ended on its next frame, in instant, the restarted course's own fade
+    in included;
+  - the scene manager's wait for the master volume's fade out (about 0.5 s per scene change);
+  - Endless / 100 Mario: the lives card's 180-frame appear animation, which its scene and its leave animation wait
+    for.
+
+  The miss post, the lives, the checkpoint and the scene to go to are set at the death event's start and at the scene
+  change, which run as before. `RECOMP_QUICK_RETRY_SHORT=0` keeps SMM2's own timing (only fast-forwarded); `=alt`
+  shortens every other miss, for side-by-side timings in one run.
 - **Start:** the death fanfare (music state 7: `costume.c` `down_fanfare`, main+0x17a4bc0).
 - **End:** in Endless and 100 Mario, the Endless scene's play state running again (`bridge.c` `play_exec`,
   main+0x1bb9440), up to 900 frames. Elsewhere, the first player update after frames without one (`trace.c`), each
@@ -1030,15 +1043,20 @@ It applies immediately.
   the Course Maker) it lapses by itself.
 - **Measured** (M-series Mac, muted test runs), miss to playing again:
 
-  | | SMM2 | Quick level return |
-  |---|---|---|
-  | Coursebot course | ~4.6 s | 1.6 s |
-  | 100 Mario (lives card included) | 9.7 s | 2.3 s |
+  | | SMM2 | fast-forward only (2026-10-21) | cut short too (2026-11-06) |
+  |---|---|---|---|
+  | Coursebot / Course World course | ~4.6 s | 1.6–2.3 s (259 frames) | ~1 s (20 frames + the rebuild) |
+  | 100 Mario (lives card included) | 9.7 s | 2.2–2.5 s (540 frames) | ~1.1 s (70 frames + the rebuild) |
 
-  Test play's miss went back to the Course Maker about 0.5 s after the miss. About 0.7 s of each restart is the
-  course's reload, which the fast-forward can't shorten. With the switch off, the same 100 Mario run missed at the
-  same point, took SMM2's 9.7 s, and never ran above 60 fps.
-- **Test:** a one-course server holding `testcourses/3W_water.course`, the 100 Mario recipe above with
+  Most of what is left is one frame: the course built again from scratch by a game worker thread (about 0.8 s on a
+  quiet Mac, the game's own work: it grows with the Mac's load). Test play's miss goes back to the Course Maker.
+  With the switch off, the same 100 Mario run missed at the same point, took SMM2's 9.7 s, and never ran above 60 fps.
+  Tried and dropped: leaving out the draws of hidden frames (15–25% quicker, but compute passes then read targets
+  never drawn and the course's colours stayed broken after the restart).
+- **Test:** the death course (`tools/death_course.py`, a miss every few seconds) first in the test server's 100 Mario
+  run queue with `RECOMP_MOD_FLOW_TEST=0 RECOMP_MOD_FLOW_TEST_CONTINUE=1 RECOMP_MOD_AUTOPLAY=1` (the flow-test recipe
+  above), and `RECOMP_QUICK_RETRY_SHORT=alt`: the log's "[quick-retry] restarted after N frames, T s" lines compare
+  both timings in one run. Older recipe: a one-course server holding `testcourses/3W_water.course`, the 100 Mario recipe above with
   `courses=server` (a copy of `smm2mods.ini` through `RECOMP_MOD_INI`), `RECOMP_HUNDRED_INPUT="5950:A:8,6150:A:8,6350:A:8"`
   for the flow's map, and right held from frame 6700: Mario misses at frame ~9780. `LARECOMP_FPS_INTERVAL=0.25`
   shows the fast-forward's rate. Don't save frames during it: the PNG writes slow every frame down.
