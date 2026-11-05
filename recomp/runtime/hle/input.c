@@ -5,9 +5,6 @@
 // controller by position, Switch A = east).
 #include <pthread.h>
 #include <SDL3/SDL.h>
-#ifdef __APPLE__
-#include <TargetConditionals.h>
-#endif
 #include <ctype.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -15,7 +12,6 @@
 #include <string.h>
 
 #include "../hle.h"
-#include "close_key.h"
 #include "../nvn/nvn.h"
 #include "../nvn/renderer.h"
 #include "../settings.h"
@@ -283,24 +279,6 @@ static bool pc_event(const SDL_Event *e) {
     default:
         return false;
     }
-}
-
-// iPhone / iPad: Control-W / Command-W closes the app (runtime/hle/close_key.h). The event loop asks this before the
-// menu or the game can take the key, since iPadOS never sees a key the game gets. True when it took the event.
-bool input_close_shortcut(const SDL_Event *e) {
-#if defined(__APPLE__) && TARGET_OS_IPHONE
-    if (e->type != SDL_EVENT_KEY_DOWN) return false;
-    SDL_Keymod m = e->key.mod;
-    if (!close_shortcut(e->key.key == SDLK_W, (m & SDL_KMOD_CTRL) != 0, (m & SDL_KMOD_GUI) != 0,
-                        (m & SDL_KMOD_ALT) != 0, (m & SDL_KMOD_SHIFT) != 0, e->key.repeat))
-        return false;
-    extern void ios_close_app(void);  // runtime/ui/touchpad.mm
-    ios_close_app();
-    return true;
-#else
-    (void)e;
-    return false;
-#endif
 }
 
 void input_handle_event(const SDL_Event *e) {

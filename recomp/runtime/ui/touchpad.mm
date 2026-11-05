@@ -195,25 +195,51 @@ extern "C" void touchpad_draw(float w, float h) {
 
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 #import <UIKit/UIKit.h>
-// Control-W / Command-W (runtime/hle/close_key.h, from runtime/hle/input.c): close the app as iPadOS closes others.
-// UIApplication's suspend goes back to the Home Screen with the system's fade, as the Home gesture does (an exit()
-// alone looked like a force quit); once the app is in the background the process ends, so the next start is a fresh
-// one. (UI thread)
-extern "C" void ios_close_app(void) {
-    static bool closing;
-    if (closing) return;
-    closing = true;
-    fprintf(stderr, "[input] Control/Command-W: closing\n");
-    UIApplication *app = UIApplication.sharedApplication;
-    SEL suspend = NSSelectorFromString(@"suspend");
-    if (![app respondsToSelector:suspend]) exit(0);
-    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil
-                                                     queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ exit(0); });
+#import <objc/message.h>
+#import <objc/runtime.h>
+// iPadOS's own Command shortcuts, Command-W (close the window) above all: SDL's view reads the keyboard through
+// GameController and passes key presses on to UIKit only while typing, so the system never saw them. Presses made with
+// Command held now go on up the responder chain as well (the game still gets the keys), and a closed window ends the
+// app, as closing does other iPadOS apps.
+static NSMutableSet<UIPress *> *g_cmd_presses;  // passed on at their start: their end goes too (UI thread)
+
+static void pass_cmd_presses(id view, SEL sel, NSSet<UIPress *> *presses, UIPressesEvent *event, bool began) {
+    NSMutableSet<UIPress *> *pass = [NSMutableSet set];
+    for (UIPress *p in presses) {
+        if (began) {
+            if (p.key && (p.key.modifierFlags & UIKeyModifierCommand)) { [g_cmd_presses addObject:p]; [pass addObject:p]; }
+        } else if ([g_cmd_presses containsObject:p]) {
+            [g_cmd_presses removeObject:p];
+            [pass addObject:p];
+        }
+    }
+    if (!pass.count || SDL_TextInputActive(SDL_GetKeyboardFocus())) return;  // (typing: SDL passes them on itself)
+    struct objc_super up = {view, [UIView class]};
+    ((void (*)(struct objc_super *, SEL, id, id))objc_msgSendSuper)(&up, sel, pass, event);
+}
+
+__attribute__((constructor)) static void ios_system_shortcuts(void) {
+    Class c = NSClassFromString(@"SDL_uikitview");
+    if (!c) return;
+    g_cmd_presses = [NSMutableSet set];
+    const SEL sels[] = {@selector(pressesBegan:withEvent:), @selector(pressesEnded:withEvent:),
+                        @selector(pressesCancelled:withEvent:)};
+    for (int i = 0; i < 3; i++) {
+        Method m = class_getInstanceMethod(c, sels[i]);
+        if (!m) continue;
+        SEL sel = sels[i];
+        bool began = i == 0;
+        IMP orig = method_getImplementation(m);
+        method_setImplementation(m, imp_implementationWithBlock(^(id view, NSSet<UIPress *> *presses, UIPressesEvent *event) {
+            ((void (*)(id, SEL, id, id))orig)(view, sel, presses, event);
+            pass_cmd_presses(view, sel, presses, event, began);
+        }));
+    }
+    [NSNotificationCenter.defaultCenter addObserverForName:UISceneDidDisconnectNotification object:nil queue:nil
+                                                usingBlock:^(NSNotification *n) {
+        if (![n.object isKindOfClass:UIWindowScene.class]) return;
+        fprintf(stderr, "[ios] the window was closed: quitting\n");
+        exit(0);
     }];
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
-    [app performSelector:suspend];
-#pragma clang diagnostic pop
 }
 #endif

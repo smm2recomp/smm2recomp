@@ -25,5 +25,4 @@ bool renderer_format_is_soft16(uint32_t f);  // packed 16-bit colour texture bac
 void renderer_soft16_decode(uint32_t f, const uint8_t *src, uint64_t n, uint8_t *dst);
 void renderer_mark_gpu_owned(NvnTexture *t);
 void input_handle_event(const SDL_Event *e);
-bool input_close_shortcut(const SDL_Event *e);  // iPhone / iPad: Control-W / Command-W closes the app
 bool input_user_blocked(const SDL_Event *e);

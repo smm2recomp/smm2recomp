@@ -1832,7 +1832,6 @@ int ui_run(void) {
         while (SDL_WaitEventTimeout(&e, 16)) {
             if (e.type == SDL_EVENT_QUIT) { LOG("window closed\n"); exit(0); }
             if (input_user_blocked(&e)) continue;  // scripted test runs: the real keyboard / mouse / pads do nothing
-            if (input_close_shortcut(&e)) continue;
             if (menu_handle_event(&e)) continue;
             input_handle_event(&e);
         }
