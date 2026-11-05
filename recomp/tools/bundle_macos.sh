@@ -46,7 +46,9 @@ write_readme "$C/Resources/README.txt" "$TARGET" "$VERSION"
 # iPad" builds the player's own iPhone / iPad app from it (runtime/iosbuild.c); without it the app has no iPhone section
 if [ -d build/ios-kit ]; then
     cp -R build/ios-kit "$C/Resources/ios-kit"
-    tools/test_ios_kit.sh "$C/Resources/ios-kit" || { echo "$C/Resources/ios-kit: the iOS kit fails its check"; exit 1; }
+    [ -n "${GAMELIB_ID:-}" ] || { echo "bundle_macos.sh: GAMELIB_ID isn't set (make app-macos sets it)"; exit 1; }
+    KIT_EXPECT_ID=$GAMELIB_ID tools/test_ios_kit.sh "$C/Resources/ios-kit" ||
+        { echo "$C/Resources/ios-kit: the iOS kit fails its check (make TARGET=ios-arm64 ios-kit again)"; exit 1; }
 fi
 
 # ---- dylibs: copy every non-system dependency, recursively; point all references at @rpath/<name>

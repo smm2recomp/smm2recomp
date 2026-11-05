@@ -891,7 +891,7 @@ static std::string g_ios_why, g_ios_step, g_ios_out;
 static bool g_ios_files = true;  // "Include the game files"
 
 static void *ios_check_thread(void *) {  // (xcrun takes a moment: not on the UI thread)
-    char why[300];
+    char why[300] = "";
     bool ok = iosbuild_available(why, sizeof why);
     pthread_mutex_lock(&g_ios_lock);
     g_ios_why = why;
@@ -1108,6 +1108,12 @@ extern "C" void launcher_run(const char *root) {
             if (e.type == SDL_EVENT_QUIT) quit = true;
         }
         if (quit) {
+#ifdef __APPLE__
+            if (g_ios_job == 1) {  // the iPhone build: its compilers end and its work folder goes before the app does
+                gamebuild_cancel();
+                for (int i = 0; i < 300 && g_ios_job == 1; i++) SDL_Delay(50);
+            }
+#endif
             pthread_mutex_lock(&g_lock);
             g_cancel = true;
             if (g_child) plat_proc_kill(g_child), g_child = 0;

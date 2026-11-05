@@ -481,7 +481,7 @@ app-macos:
 	[ -f build/deps/lib/libSDL3.0.dylib ] || MACOS_MIN=$(APP_MACOS_MIN) tools/build_deps_macos.sh
 	$(MAKE) GAME=$(GAME) B=build/$(GAME)-app DEPS=$(realpath build)/deps MACOS_MIN=$(APP_MACOS_MIN) \
 	    RECOMP_VERSION=$(RECOMP_VERSION) build/$(GAME)-app/$(GAME_ID)recomp
-	RECOMP_VERSION=$(RECOMP_VERSION) MACOS_MIN=$(APP_MACOS_MIN) tools/bundle_macos.sh build/$(GAME)-app/$(GAME_ID)recomp
+	RECOMP_VERSION=$(RECOMP_VERSION) MACOS_MIN=$(APP_MACOS_MIN) GAMELIB_ID=$(GAMELIB_ID) tools/bundle_macos.sh build/$(GAME)-app/$(GAME_ID)recomp
 
 # The course server inside the app (core/crates/embed) for this target, with cargo (no debug info: it would add ~80 MB
 # to each package)

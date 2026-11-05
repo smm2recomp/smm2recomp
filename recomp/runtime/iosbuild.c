@@ -2,6 +2,7 @@
 #include "iosbuild.h"
 
 #include <copyfile.h>
+#include <glob.h>
 #include <errno.h>
 #include <ftw.h>
 #include <libgen.h>
@@ -96,10 +97,34 @@ bool iosbuild_available(char *why, size_t n) {
     }
     char sdk[1100];
     if (!have_developer_dir() || !run_line("/usr/bin/xcrun --sdk iphoneos --show-sdk-path 2>/dev/null", sdk, sizeof sdk)) {
-        snprintf(why, n, "Install Xcode from the App Store, open it once, and add iOS under Xcode > Settings > Components.");
+        // an Xcode with iOS that isn't the selected one (the command line tools are: Homebrew's, installed first)
+        const char *apps = getenv("IOSBUILD_TEST_APPS_DIR");
+        char pat[1100];
+        snprintf(pat, sizeof pat, "%s/Xcode*.app/Contents/Developer/Platforms/iPhoneOS.platform", apps && *apps ? apps : "/Applications");
+        glob_t g;
+        bool other = glob(pat, 0, NULL, &g) == 0 && g.gl_pathc > 0;
+        globfree(&g);
+        if (other)
+            snprintf(why, n, "Xcode is installed but not selected: choose it in Xcode > Settings > Locations > Command Line "
+                             "Tools, or run: sudo xcode-select -s /Applications/Xcode.app");
+        else
+            snprintf(why, n, "Install Xcode from the App Store, open it once, and add iOS under Xcode > Settings > Components.");
         return false;
     }
     return true;
+}
+
+// compilers at once: one per core, as memory allows (a compiler takes up to ~1 GB, the generators ~4 GB together: as
+// the setup screen's build); RECOMP_BUILD_JOBS=<n> sets it
+static int build_jobs(void) {
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    unsigned long long mem = 0;
+    size_t sz = sizeof mem;
+    sysctlbyname("hw.memsize", &mem, &sz, NULL, 0);
+    long ram_gb = (long)(mem >> 30), jobs = cores < ram_gb - 6 ? cores : ram_gb - 6;
+    const char *e = getenv("RECOMP_BUILD_JOBS");
+    if (e && atoi(e) > 0) jobs = atoi(e);
+    return jobs > 1 ? (int)jobs : 1;
 }
 
 void iosbuild_default_out(char *out, size_t n) {
@@ -232,27 +257,39 @@ bool iosbuild_run(const char *data_root, const IosBuildOpts *o, char *why, size_
         snprintf(why, n, "Not enough free disk space: the build needs about %d GB free, and %.1f GB is.", need_gb, free_gb);
         return false;
     }
+    // the .ipa's folder writable (Downloads: macOS may ask the player first) now, not after the build
+    snprintf(g_part, sizeof g_part, "%s.part", o->out);
+    FILE *probe = fopen(g_part, "wb");
+    if (!probe) {
+        char dir[1100];
+        snprintf(dir, sizeof dir, "%s", o->out);
+        snprintf(why, n, "can't write to %s (%s)", dirname(dir), strerror(errno));
+        g_part[0] = 0;
+        return false;
+    }
+    fclose(probe);
     char kit[1100], inc[1100], sdk[1100], clang[1100], clangxx[1200];
     if (!kit_dir(kit, sizeof kit) || !rt_resource("gamelib-src/cpu.h", "runtime/cpu.h", inc, sizeof inc) ||
         !run_line("/usr/bin/xcrun --sdk iphoneos --show-sdk-path 2>/dev/null", sdk, sizeof sdk) ||
         !run_line("/usr/bin/xcrun --sdk iphoneos -f clang 2>/dev/null", clang, sizeof clang)) {
         snprintf(why, n, "the iPhone build's tools are missing from this copy of the app");
+        remove(g_part), g_part[0] = 0;
         return false;
     }
     snprintf(clangxx, sizeof clangxx, "%s++", clang);
     { char t[1100]; snprintf(t, sizeof t, "%s", inc); snprintf(inc, sizeof inc, "%s", dirname(t)); }
 
     snprintf(g_work, sizeof g_work, "%s/ios-build", data_root);
-    snprintf(g_part, sizeof g_part, "%s.part", o->out);
     char obj[1200], app[1200], log[1200];
     snprintf(obj, sizeof obj, "%s/obj", g_work);
     snprintf(app, sizeof app, "%s/Payload/SMM2Recomp.app", g_work);
     rm_work(g_work);
-    remove(g_part);
     snprintf(p, sizeof p, "%s/Payload", g_work);
     bool ok = mkdir(g_work, 0755) == 0 && mkdir(obj, 0755) == 0 && mkdir(p, 0755) == 0 && mkdir(app, 0755) == 0;
     if (!ok) snprintf(why, n, "can't make %s (%s)", g_work, strerror(errno));
-    LOG("[iosbuild] kit %s, compiler %s, SDK %s, game files %s, to %s\n", kit, clang, sdk, o->game_files ? "in" : "out", o->out);
+    int jobs = build_jobs();
+    LOG("[iosbuild] kit %s, compiler %s, SDK %s, %d jobs, game files %s, to %s\n", kit, clang, sdk, jobs,
+        o->game_files ? "in" : "out", o->out);
 
     // 1. the game code, with Xcode's compiler for iOS
     List cc = {0}, cflags = {0}, link = {0};
@@ -263,8 +300,7 @@ bool iosbuild_run(const char *data_root, const IosBuildOpts *o, char *why, size_
         ok = push_lines(&cflags, p);
         snprintf(p, sizeof p, "-I%s", inc), push(&cflags, p);
         push(&cflags, "-DGAMELIB_ID=\"" GAMELIB_ID "\"");
-        long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-        GameBuildOpts go = {compile_progress, cpus > 1 ? (int)cpus : 1};
+        GameBuildOpts go = {compile_progress, jobs};
         step("Building the game code", 0.05f);
         if (!ok) snprintf(why, n, "the iPhone kit is incomplete: reinstall the app");
         else ok = gamebuild_compile(game, obj, (const char *const *)cc.v, (const char *const *)cflags.v, &go, &objs, why, n);

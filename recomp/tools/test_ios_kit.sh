@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: tools/test_ios_kit.sh <kit dir> [<dir of iOS game objects>]
+# usage: [KIT_EXPECT_ID=<GAMELIB_ID>] tools/test_ios_kit.sh <kit dir> [<dir of iOS game objects>]
 # Checks an iOS kit (make TARGET=ios-arm64 ios-kit; Contents/Resources/ios-kit in the Mac app): every file the Mac
 # app's iPhone build reads (runtime/iosbuild.c), no game code in it, everything built for iOS devices. With a folder
 # of iOS game objects (e.g. build/smm2-ios-arm64/obj), also links them with the kit into an executable, as the Mac
@@ -19,6 +19,8 @@ for k in com.apple.developer.kernel.extended-virtual-addressing com.apple.develo
 done
 id=$(plutil -extract gamelib_id raw "$K/kit.json" 2>/dev/null) || fail "kit.json has no gamelib_id"
 [ ${#id} -eq 16 ] || fail "kit.json gamelib_id '$id' isn't 16 hex digits"
+# (the Mac app's: its game code is built for that id, and the app refuses a kit made for another)
+[ -z "${KIT_EXPECT_ID:-}" ] || [ "$id" = "$KIT_EXPECT_ID" ] || fail "kit.json gamelib_id $id isn't the app's $KIT_EXPECT_ID"
 [ "$(plutil -extract ios_min raw "$K/kit.json")" = 17.0 ] || fail "kit.json ios_min isn't 17.0"
 grep -q -- '-framework' "$K/link.txt" || fail "link.txt has no frameworks"
 ! grep -q -- '^-L\|^-I\|^-target' "$K/link.txt" "$K/game_cflags.txt" || fail "link.txt / game_cflags.txt carry paths or -target"
