@@ -58,6 +58,7 @@ extern "C" bool launcher_has_settings(void) { return false; }
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <sys/xattr.h>
+#import <AppKit/AppKit.h>
 #endif
 #include <SDL3/SDL.h>
 #include <ctype.h>
@@ -84,6 +85,9 @@ extern "C" bool launcher_has_settings(void) { return false; }
 extern "C" {
 #include "gamebuild.h"
 #include "gamelib.h"
+#ifdef __APPLE__
+#include "iosbuild.h"
+#endif
 #include "platform.h"
 void rt_log(const char *fmt, ...);  // runtime/rt.h LOG
 void ui_window_init(void);
@@ -876,6 +880,118 @@ static bool big_button(const char *label, bool enabled, float w, float h) {
     return r;
 }
 
+// ------------------------------------------------------------------ Build for iPhone / iPad (macOS: runtime/iosbuild.h)
+#ifdef __APPLE__
+// its own state and thread, apart from the setup job's (g_steps / g_job)
+static pthread_mutex_t g_ios_lock = PTHREAD_MUTEX_INITIALIZER;
+static std::atomic<int> g_ios_avail{0};  // 0 being checked, 1 yes, 2 no (g_ios_why), 3 no kit: no iPhone section
+static std::atomic<int> g_ios_job{0};    // 0 idle, 1 running, 2 done (g_ios_out), 3 failed (g_ios_why), 4 cancelled
+static std::atomic<float> g_ios_frac{0};
+static std::string g_ios_why, g_ios_step, g_ios_out;
+static bool g_ios_files = true;  // "Include the game files"
+
+static void *ios_check_thread(void *) {  // (xcrun takes a moment: not on the UI thread)
+    char why[300];
+    bool ok = iosbuild_available(why, sizeof why);
+    pthread_mutex_lock(&g_ios_lock);
+    g_ios_why = why;
+    pthread_mutex_unlock(&g_ios_lock);
+    g_ios_avail = ok ? 1 : strstr(why, "no iPhone kit") ? 3 : 2;
+    return NULL;
+}
+
+static void ios_progress(const char *step, float frac) {
+    pthread_mutex_lock(&g_ios_lock);
+    g_ios_step = step;
+    pthread_mutex_unlock(&g_ios_lock);
+    g_ios_frac = frac;
+}
+
+static void *ios_build_thread(void *) {
+    char out[1100], why[512];
+    iosbuild_default_out(out, sizeof out);
+    IosBuildOpts o = {g_ios_files, out, ios_progress};
+    bool ok = iosbuild_run(rt_data_root(), &o, why, sizeof why);
+    pthread_mutex_lock(&g_ios_lock);
+    g_ios_out = out, g_ios_why = why;
+    pthread_mutex_unlock(&g_ios_lock);
+    g_ios_job = ok ? 2 : gamebuild_cancelled() ? 4 : 3;
+    return NULL;
+}
+
+static void ios_start(void) {
+    g_ios_frac = 0;
+    ios_progress("Checking", 0);
+    g_ios_job = 1;
+    pthread_t th;
+    if (pthread_create(&th, NULL, ios_build_thread, NULL) == 0) pthread_detach(th);
+    else g_ios_job = 0;
+}
+
+static void reveal_in_finder(const std::string &path) {
+    NSURL *u = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ u ]];
+}
+
+// The card, under the game's (job 0 only). ready: the game is set up. Tests: RECOMP_LAUNCHER_IOS=show scrolls it into
+// view, =build also presses the button once it can (as the player would), =cancel:<s> then presses Cancel <s>
+// seconds later.
+static void ios_card(bool ready, float s) {
+    if (g_ios_avail == 3) return;  // (an app without the iOS kit: a source checkout's own build)
+    ImGui::Spacing();
+    card_begin("##c4", "", "iPhone and iPad", s);
+    wrapped(DIM, "Make an app for your iPhone or iPad from your game. You sign and install it yourself (AltStore, "
+                 "Sideloadly or Xcode).");
+    pthread_mutex_lock(&g_ios_lock);
+    std::string why = g_ios_why, step = g_ios_step, out = g_ios_out;
+    pthread_mutex_unlock(&g_ios_lock);
+    int job = g_ios_job, avail = g_ios_avail;
+    const char *test = getenv("RECOMP_LAUNCHER_IOS");
+    static double test_started;
+    if (job == 1) {
+        char pct[32];
+        snprintf(pct, sizeof pct, "%.0f%%", g_ios_frac * 100);
+        ImGui::TextColored(GOLD, "%s...", step.c_str());
+        ImGui::ProgressBar(g_ios_frac, ImVec2(-1, 30 * s), pct);
+        bool cancel = ImGui::Button("Cancel");
+        if (test && !strncmp(test, "cancel:", 7) && SDL_GetTicks() / 1000.0 - test_started > atof(test + 7)) cancel = true;
+        if (cancel) gamebuild_cancel();
+        ImGui::EndChild();
+        if (test) ImGui::SetScrollHereY(1.0f);
+        return;
+    }
+    if (job == 2) {
+        wrapped(GOOD, "Saved %s in %s.", base_name(out).c_str(),
+                out.find("/Downloads/") != std::string::npos ? "Downloads" : out.substr(0, out.rfind('/')).c_str());
+        wrapped(WARN, "It contains your game: don't share it.");
+        if (ImGui::Button("Show in Finder")) reveal_in_finder(out);
+        ImGui::SameLine();
+    } else if (job == 3) {
+        wrapped(BAD, "%s", why.c_str());
+        if (ImGui::Button("Show log")) reveal_in_finder(std::string(rt_data_root()) + "/" GAME_ID "recomp.log");
+        ImGui::SameLine();
+    } else if (job == 4) {
+        wrapped(DIM, "Cancelled.");
+    }
+    bool can = avail == 1 && ready;
+    ImGui::Checkbox("Include the game files (about 3 GB)", &g_ios_files);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Without them the app is small, and you copy extracted/, fonts/ and sysdata/ into its "
+                          "Documents folder yourself (Finder or the Files app).");
+    ImGui::SameLine(0, 24 * s);
+    ImGui::BeginDisabled(!can);
+    bool go = ImGui::Button("Build for iPhone / iPad");
+    ImGui::EndDisabled();
+    const char *reason = avail == 0 ? "Checking for Xcode..." : avail == 2 ? why.c_str() : !ready ? "Set up the game first." : NULL;
+    if (reason && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", reason);
+    if (reason) wrapped(DIM, "%s", reason);
+    if (can && test && job == 0 && (!strncmp(test, "build", 5) || !strncmp(test, "cancel", 6))) go = true;
+    if (go) test_started = SDL_GetTicks() / 1000.0, ios_start();
+    ImGui::EndChild();
+    if (test) ImGui::SetScrollHereY(1.0f);  // (tests: the card in view for the screenshots)
+}
+#endif
+
 // ------------------------------------------------------------------ the screen
 extern "C" void launcher_run(const char *root) {
     g_root = root;
@@ -886,6 +1002,12 @@ extern "C" void launcher_run(const char *root) {
     if (g_cfg.firmware.empty())
         for (auto &f : firmware_candidates()) if (dir_exists(f)) { g_cfg.firmware = f; break; }
     launcher_update_check_start();
+#ifdef __APPLE__
+    if (g_ios_avail == 0) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, ios_check_thread, NULL) == 0) pthread_detach(th);
+    }
+#endif
     // the auto-fill of a test run
     const char *autof = getenv("RECOMP_LAUNCHER_AUTO");
     if (autof) {
@@ -1145,6 +1267,9 @@ extern "C" void launcher_run(const char *root) {
                 if (path_row("SMM1", g_cfg.smm1, "folder with the decrypted title(s)", PICK_SMM1, true, s)) config_save();
                 status_line(sm, 130 * s);
                 ImGui::EndChild();
+#ifdef __APPLE__
+                ios_card(game_files_ok(g_root) && !fonts_needed, s);
+#endif
             } else {
                 // ---- the steps
                 card_begin("##run", "", job == 3 ? "Setup stopped" : "Setting up", s);
@@ -1191,8 +1316,12 @@ extern "C" void launcher_run(const char *root) {
             float bh = 64 * s;
             if (job == 0) {
                 const char *label = (files_ready || g_built_wait) && !fonts_needed ? "Play" : "Set up and play";
-                bool go = big_button(label, can_start || files_ready, 320 * s, bh);
-                if (autof && frame == 45 && (can_start || files_ready)) go = true;  // (test: as if pressed)
+                bool ios_busy = false;
+#ifdef __APPLE__
+                ios_busy = g_ios_job == 1;  // (the two builds share the compilers and the cancel)
+#endif
+                bool go = big_button(label, (can_start || files_ready) && !ios_busy, 320 * s, bh);
+                if (autof && frame == 45 && (can_start || files_ready) && !ios_busy) go = true;  // (test: as if pressed)
                 if (go) {
                     config_save();
                     g_cancel = false;
@@ -1248,6 +1377,9 @@ extern "C" void launcher_run(const char *root) {
             char shot_path[1200];
             if (shots) {
                 int key = job * 100;
+#ifdef __APPLE__
+                key += g_ios_job * 1000 + g_ios_avail * 10000;
+#endif
                 pthread_mutex_lock(&g_lock);
                 for (int i = 0; i < 3; i++) key += g_steps[i].state * (i == 0 ? 1 : i == 1 ? 5 : 25);
                 pthread_mutex_unlock(&g_lock);
