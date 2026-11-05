@@ -212,8 +212,58 @@ static void boot(const char *root) {
     kernel_run_main(t, t->handle, 0, init_fn, fini_fn);  // nn::init::Start(thread_handle, args_region, init, fini)
 }
 
+#if defined(__APPLE__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+#include <signal.h>
+#include <unistd.h>
+#include "iosbuild.h"
+// smm2recomp --build-ios [--no-game-files] [<out.ipa>]: the setup screen's "Build for iPhone / iPad" without it
+// (runtime/iosbuild.h). Ctrl-C / SIGTERM cancel it (its compilers end, its work folder is removed).
+static void ios_cli_progress(const char *step, float frac) {
+    static char last[64];
+    static int last_pct = -100;
+    int pct = (int)(frac * 100);
+    if (strcmp(step, last) != 0 || pct >= last_pct + 5) {
+        snprintf(last, sizeof last, "%s", step);
+        last_pct = pct;
+        printf("%3d%% %s\n", pct, step);
+        fflush(stdout);
+    }
+}
+static void ios_cli_cancel(int sig) { (void)sig; gamebuild_cancel(); }
+static int build_ios_cli(int argc, char **argv) {
+    bool files = true;
+    char out[1100] = "";
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--build-ios")) continue;
+        else if (!strcmp(argv[i], "--no-game-files")) files = false;
+        else if (argv[i][0] == '-') { fprintf(stderr, "usage: %s --build-ios [--no-game-files] [<out.ipa>]\n", argv[0]); return 1; }
+        else if (argv[i][0] == '/') snprintf(out, sizeof out, "%s", argv[i]);
+        else {  // (relative to where it was started: rt_paths_init changes the working directory)
+            char cwd[900];
+            snprintf(out, sizeof out, "%s/%s", getcwd(cwd, sizeof cwd) ? cwd : ".", argv[i]);
+        }
+    }
+    rt_paths_init();
+    if (!out[0]) iosbuild_default_out(out, sizeof out);
+    signal(SIGINT, ios_cli_cancel);
+    signal(SIGTERM, ios_cli_cancel);
+    IosBuildOpts o = {files, out, ios_cli_progress};
+    char why[512];
+    if (!iosbuild_run(rt_data_root(), &o, why, sizeof why)) {
+        fprintf(stderr, "%s\n", why);
+        return 1;
+    }
+    printf("Saved %s\n", out);
+    return 0;
+}
+#endif
+
 int main(int argc, char **argv) {
     plat_init();
+#if defined(__APPLE__) && !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
+    for (int i = 1; i < argc; i++)
+        if (!strcmp(argv[i], "--build-ios")) return build_ios_cli(argc, argv);
+#endif
     if (g_guest_unreserved) {  // iOS without the extended virtual addressing entitlement (tools/make_ios_app.sh)
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
         extern void plat_guest_report(uint64_t lo, uint64_t hi);  // runtime/platform/macos.c, linux.c

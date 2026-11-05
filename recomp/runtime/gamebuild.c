@@ -3,6 +3,7 @@
 #include "game.h"
 
 #include <pthread.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,11 @@ static pthread_mutex_t g_plock = PTHREAD_MUTEX_INITIALIZER;
 static PlatProc g_procs[MAX_PROCS];
 static int g_nprocs;
 static bool g_quitting;
+static volatile sig_atomic_t g_cancel;  // gamebuild_cancel (a signal handler may set it)
+
+void gamebuild_cancel(void) { g_cancel = 1; }
+void gamebuild_cancel_clear(void) { g_cancel = 0; }
+bool gamebuild_cancelled(void) { return g_cancel != 0; }
 
 static void end_all(void) {
     pthread_mutex_lock(&g_plock);
@@ -55,7 +61,7 @@ static void end_all(void) {
 
 static PlatProc spawn(char **argv, const char *log) {
     pthread_mutex_lock(&g_plock);
-    PlatProc p = g_quitting ? 0 : plat_spawn((const char *const *)argv, log, false);
+    PlatProc p = g_quitting || g_cancel ? 0 : plat_spawn((const char *const *)argv, log, false);
     if (p && g_nprocs < MAX_PROCS) g_procs[g_nprocs++] = p;
     pthread_mutex_unlock(&g_plock);
     return p;
@@ -83,10 +89,20 @@ static void stop(PlatProc p) {  // ends one that is still running, then forgotte
 
 static void sleep_ms(int ms) { plat_sleep_until_ns(plat_now_ns() + (uint64_t)ms * 1000000ull); }
 
-static int wait_for(PlatProc p) {
+static int wait_for(PlatProc p) {  // (-1: cancelled, the child ended)
     int r;
-    while ((r = finished(p)) < 0) sleep_ms(20);
+    while ((r = finished(p)) < 0) {
+        if (g_cancel) { stop(p); return -1; }
+        sleep_ms(20);
+    }
     return r;
+}
+
+int gamebuild_exec(const char *const *argv, const char *log) {
+    static bool registered;
+    if (!registered) registered = true, atexit(end_all);
+    PlatProc p = spawn((char **)argv, log);
+    return p ? wait_for(p) : -1;
 }
 
 // ------------------------------------------------------------------ argument lists
@@ -155,7 +171,7 @@ bool gamebuild_python(char *out, size_t n) {
     return true;
 }
 
-static bool find_tools(Tools *t) {
+static bool find_tools(Tools *t, bool need_cc) {
     memset(t, 0, sizeof *t);
     const char *e = getenv("LARECOMP_GEN");
     if (e && *e) snprintf(t->gen, sizeof t->gen, "%s", e);
@@ -170,7 +186,7 @@ static bool find_tools(Tools *t) {
 #ifndef _WIN32
     else if (rt_dev_mode() && file_exists("/usr/bin/clang")) snprintf(t->cc, sizeof t->cc, "/usr/bin/clang");
 #endif
-    else return false;
+    else if (need_cc) return false;
     if (!rt_resource("gamelib-src" SEP "cpu.h", "runtime/cpu.h", t->inc, sizeof t->inc) ||
         !rt_resource("gamelib-src" SEP "gamelib_entry.c", "tools/gamelib_entry.c", t->entry, sizeof t->entry) ||
         !rt_resource("gamelib-src" SEP "hle_symbols.txt", GAMEBUILD_HLE, t->hle, sizeof t->hle))
@@ -194,7 +210,7 @@ static bool find_tools(Tools *t) {
 
 bool gamebuild_available(void) {
     Tools t;
-    return find_tools(&t);
+    return find_tools(&t, true);
 }
 
 static void compiler(Args *a, const Tools *t) {
@@ -328,14 +344,20 @@ static void add_cflags(Args *a, const Tools *t) {
     }
 }
 
-static PlatProc start_compile(const Tools *t, const Unit *u) {
+// cc / cflags (NULL-terminated): another compiler and its flags (the iPhone build: runtime/iosbuild.c), else ours
+static PlatProc start_compile(const Tools *t, const Unit *u, const char *const *cc, const char *const *cflags) {
     Args a = {0};
-    compiler(&a, t);
-    add_cflags(&a, t);
-    char inc[1200];
-    snprintf(inc, sizeof inc, "-I%s", t->inc);
-    add(&a, inc);
-    add(&a, "-DGAMELIB_ID=\"" GAMELIB_ID "\"");
+    if (cc) {
+        for (; *cc; cc++) add(&a, *cc);
+        for (; cflags && *cflags; cflags++) add(&a, *cflags);
+    } else {
+        compiler(&a, t);
+        add_cflags(&a, t);
+        char inc[1200];
+        snprintf(inc, sizeof inc, "-I%s", t->inc);
+        add(&a, inc);
+        add(&a, "-DGAMELIB_ID=\"" GAMELIB_ID "\"");
+    }
     add(&a, "-c");
     add(&a, u->src);
     add(&a, "-o");
@@ -346,42 +368,17 @@ static PlatProc start_compile(const Tools *t, const Unit *u) {
 }
 
 // ------------------------------------------------------------------ the build
-bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size_t why_size) {
+bool gamebuild_compile(const char *game_dir, const char *work, const char *const *cc, const char *const *cflags,
+                       const GameBuildOpts *o, char ***objs, char *why, size_t why_size) {
     uint64_t t0 = plat_now_ns();
     static bool registered;
     if (!registered) registered = true, atexit(end_all);
+    *objs = NULL;
     Tools t;
-    if (!find_tools(&t)) {
+    if (!find_tools(&t, cc == NULL)) {
         snprintf(why, why_size, "the game code builder is missing from this copy of " GAME_TITLE);
         return false;
     }
-    char work[1100], lib[1100], tmp[1100];
-    snprintf(work, sizeof work, "%s" SEP ".gamebuild", game_dir);
-    snprintf(lib, sizeof lib, "%s" SEP "%s", game_dir, GAMELIB_NAME);
-    snprintf(tmp, sizeof tmp, "%s" SEP "%s.tmp", work, GAMELIB_NAME);
-    rt_remove_game_file(game_dir, ".gamebuild");
-    rt_remove_game_file(game_dir, GAMELIB_NAME);
-    rt_remove_game_file(game_dir, GAMELIB_NAME ".id");
-    mkdir(work, 0755);
-    if (t.zig) {  // its caches in the work folder too (deleted below), not ~/.cache: hundreds of MB, used once
-        char zc[1200];
-        snprintf(zc, sizeof zc, "%s" SEP "zig-cache", work);
-#ifdef _WIN32
-        _putenv_s("ZIG_GLOBAL_CACHE_DIR", zc);
-        _putenv_s("ZIG_LOCAL_CACHE_DIR", zc);
-#else
-        setenv("ZIG_GLOBAL_CACHE_DIR", zc, 1);
-        setenv("ZIG_LOCAL_CACHE_DIR", zc, 1);
-#endif
-    }
-    LOG("[gamebuild] generator %s%s%s, compiler %s%s, %d jobs\n", t.gen, t.gen_script[0] ? " " : "", t.gen_script,
-        t.cc, t.zig ? " cc" : "", o->jobs);
-#if defined(__x86_64__)
-    { const char *forced_arch = getenv("LARECOMP_GENARCH");
-      LOG("[gamebuild] x86-64 game code: %s (%s)\n", gamebuild_cpu_has_v3() ? "x86-64-v3 (AVX2/FMA/BMI2)" : "x86-64-v2 baseline",
-          forced_arch && *forced_arch ? "LARECOMP_GENARCH override" : "detected"); }
-#endif
-
     // 1. the generator, both modules at once; their finished files are compiled while it goes on
     Gen gens[2] = {{.name = "main"}, {.name = "sdk"}};
     static const char *const base[2] = {"0x7000000000", "0x7004000000"};
@@ -462,11 +459,12 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
             gen_frac += g->exit == 0 ? 0.5 : g->n ? 0.5 * (double)g->ci / (double)g->n : 0;
         }
         if (!ok) break;
+        if (g_cancel) { snprintf(why, why_size, "cancelled"); ok = false; break; }
         for (int k = 0; k < units.n; k++) written += units.u[k].bytes;
 
         // compiles
         while (nrun < jobs && next < units.n) {
-            PlatProc p = start_compile(&t, &units.u[next]);
+            PlatProc p = start_compile(&t, &units.u[next], cc, cflags);
             if (!p) { snprintf(why, why_size, "the compiler didn't start"); ok = false; break; }
             run[nrun].p = p, run[nrun].unit = next++;
             nrun++;
@@ -505,17 +503,70 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     for (int i = 0; i < 2; i++)
         if (gens[i].p && gens[i].exit < 0) stop(gens[i].p);
 
+    if (ok) {
+        *objs = (char **)calloc((size_t)units.n + 1, sizeof **objs);
+        for (int k = 0; k < units.n; k++) (*objs)[k] = strdup(units.u[k].obj);
+    }
+    free(units.u);
+    return ok;
+}
+
+void gamebuild_free_objs(char **objs) {
+    for (char **p = objs; p && *p; p++) free(*p);
+    free(objs);
+}
+
+bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size_t why_size) {
+    uint64_t t0 = plat_now_ns();
+    static bool registered;
+    if (!registered) registered = true, atexit(end_all);
+    gamebuild_cancel_clear();
+    Tools t;
+    if (!find_tools(&t, true)) {
+        snprintf(why, why_size, "the game code builder is missing from this copy of " GAME_TITLE);
+        return false;
+    }
+    char work[1100], lib[1100], tmp[1100];
+    snprintf(work, sizeof work, "%s" SEP ".gamebuild", game_dir);
+    snprintf(lib, sizeof lib, "%s" SEP "%s", game_dir, GAMELIB_NAME);
+    snprintf(tmp, sizeof tmp, "%s" SEP "%s.tmp", work, GAMELIB_NAME);
+    rt_remove_game_file(game_dir, ".gamebuild");
+    rt_remove_game_file(game_dir, GAMELIB_NAME);
+    rt_remove_game_file(game_dir, GAMELIB_NAME ".id");
+    mkdir(work, 0755);
+    if (t.zig) {  // its caches in the work folder too (deleted below), not ~/.cache: hundreds of MB, used once
+        char zc[1200];
+        snprintf(zc, sizeof zc, "%s" SEP "zig-cache", work);
+#ifdef _WIN32
+        _putenv_s("ZIG_GLOBAL_CACHE_DIR", zc);
+        _putenv_s("ZIG_LOCAL_CACHE_DIR", zc);
+#else
+        setenv("ZIG_GLOBAL_CACHE_DIR", zc, 1);
+        setenv("ZIG_LOCAL_CACHE_DIR", zc, 1);
+#endif
+    }
+    LOG("[gamebuild] generator %s%s%s, compiler %s%s, %d jobs\n", t.gen, t.gen_script[0] ? " " : "", t.gen_script,
+        t.cc, t.zig ? " cc" : "", o->jobs);
+#if defined(__x86_64__)
+    { const char *forced_arch = getenv("LARECOMP_GENARCH");
+      LOG("[gamebuild] x86-64 game code: %s (%s)\n", gamebuild_cpu_has_v3() ? "x86-64-v3 (AVX2/FMA/BMI2)" : "x86-64-v2 baseline",
+          forced_arch && *forced_arch ? "LARECOMP_GENARCH override" : "detected"); }
+#endif
+
+    char **objs = NULL;
+    bool ok = gamebuild_compile(game_dir, work, NULL, NULL, o, &objs, why, why_size);
+
     // 2. link
     if (ok) {
-        if (o->progress) o->progress(shown > 0.95 ? shown : 0.95, "Finishing...");
+        if (o->progress) o->progress(0.95, "Finishing...");
         char rsp[1100], log[1100];
         snprintf(rsp, sizeof rsp, "%s" SEP "link.rsp", work);
         snprintf(log, sizeof log, "%s" SEP "link.log", work);
         FILE *f = fopen(rsp, "wb");
         if (f) {
-            for (int k = 0; k < units.n; k++) {  // (forward slashes: the response file's backslashes are escapes)
+            for (char **ob = objs; *ob; ob++) {  // (forward slashes: the response file's backslashes are escapes)
                 fputc('"', f);
-                for (const char *c = units.u[k].obj; *c; c++) fputc(*c == '\\' ? '/' : *c, f);
+                for (const char *c = *ob; *c; c++) fputc(*c == '\\' ? '/' : *c, f);
                 fputs("\"\n", f);
             }
             fclose(f);
@@ -577,7 +628,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         }
         if (f) fclose(f);
     }
-    free(units.u);
+    gamebuild_free_objs(objs);
     rt_remove_game_file(game_dir, ".gamebuild");  // the C, the objects, the logs
     LOG("[gamebuild] %s in %.0fs\n", ok ? "done" : "failed", (double)(plat_now_ns() - t0) / 1e9);
     if (ok && o->progress) o->progress(1, "Finishing...");

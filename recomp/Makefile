@@ -137,6 +137,9 @@ RT_SRC   := $(wildcard runtime/*.c) $(wildcard runtime/hle/*.c) $(wildcard runti
 ifeq ($(PLATFORM),windows)
 RT_SRC   += runtime/platform/windows_exports.c  # (what the game code DLL calls in the exe)
 endif
+ifneq ($(PLATFORM),macos)
+RT_SRC   := $(filter-out runtime/iosbuild.c,$(RT_SRC))  # (the Mac app's "Build for iPhone / iPad")
+endif
 ifeq ($(strip $(GAME_MOVIES)),0)
 RT_SRC   := $(filter-out runtime/hle/movie.c,$(RT_SRC))
 FFMPEG_LIBS :=
@@ -313,6 +316,9 @@ $(B)/rt/gamebuild.o: $(GAMELIB_SRCS) Makefile
 $(B)/rt/gamebuild.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"' -DGAMELIB_CFLAGS='"$(strip $(filter-out -Iruntime,$(GENFLAGS)))"' \
                                 -DGAMELIB_SHARED='"$(GAMELIB_SHARED)"' -DGAMEBUILD_HLE='"$(GAME_HLE)"' \
                                 -DGAMEBUILD_PATCHES='"$(GAME_PATCHES)"'
+
+$(B)/rt/iosbuild.o: $(GAMELIB_SRCS) Makefile
+$(B)/rt/iosbuild.o: RTFLAGS += -DGAMELIB_ID='"$(GAMELIB_ID)"'
 
 $(B)/rt/net/embed_server.o: $(wildcard $(EMBED_LIB))  # (built again when the library appears)
 
