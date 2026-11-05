@@ -18,6 +18,9 @@ recompiled on your Mac from your dump, as for the Mac version.
 On the setup screen, under **iPhone and iPad**, choose **Build for iPhone / iPad**. It takes about as long
 as the Mac version's first start, and it saves `SMMaker2-<version>.ipa` in your Downloads folder.
 
+Once the game is set up, the Mac app starts straight into the game. To get back to the setup screen, open
+the overlay menu (F1 or Esc) and choose **Quit > Quit to Start Screen**.
+
 From Terminal, the same build:
 
     "/Applications/Super Mario Maker 2.app/Contents/MacOS/smm2recomp" --build-ios [--no-game-files] [<file.ipa>]
