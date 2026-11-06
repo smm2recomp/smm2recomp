@@ -1094,6 +1094,27 @@ static void begin_pass(void) {
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}}, .layerCount = 1,
                           .colorAttachmentCount = pass_ncolor, .pColorAttachments = ca,
                           .pDepthAttachment = has_d ? &da : NULL, .pStencilAttachment = has_s ? &sa : NULL};
+    {   // Each new pass shape once in the log (at most 64): Intel's legacy Windows driver still crashes in
+        // vkCmdBeginRendering with no empty color slot in the pass (#60, v0.7.5), so the last such line before a crash
+        // names the shape it doesn't take.
+        static struct { uint32_t n, s; VkFormat c[8], d, st; } seen[64];
+        static int nseen;
+        bool known = false;
+        for (int k = 0; k < nseen && !known; k++)
+            known = seen[k].n == pass_ncolor && seen[k].s == pass_samples && seen[k].d == pass_depth && seen[k].st == pass_stencil &&
+                    !memcmp(seen[k].c, pass_color, sizeof seen[k].c);
+        if (!known && nseen < 64) {
+            seen[nseen].n = pass_ncolor, seen[nseen].s = pass_samples, seen[nseen].d = pass_depth, seen[nseen].st = pass_stencil;
+            memcpy(seen[nseen].c, pass_color, sizeof seen[nseen].c);
+            nseen++;
+            char cs[96] = "";
+            for (uint32_t i = 0; i < pass_ncolor; i++)
+                snprintf(cs + strlen(cs), sizeof cs - strlen(cs), " %d", ca[i].imageView ? (int)pass_color[i] : -1);
+            LOG("[vk] pass shape %d: %ux%u, %u color (formats%s), depth %d, stencil %d, %u samples, level %u\n", nseen, minw, minh,
+                pass_ncolor, cs, has_d ? (int)pass_depth : 0, has_s ? (int)pass_stencil : 0, pass_samples,
+                pass_ncolor && st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0);
+        }
+    }
     if (g_debug_frame) {
         LOG("[pass] begin %ux%u:", minw, minh);
         for (uint32_t i = 0; i < pass_ncolor; i++) LOG(" c%u(view %p fmt %d load %d tex %p)", i, (void *)ca[i].imageView, pass_color[i], ca[i].loadOp, (void *)st.rt.color[i]);
