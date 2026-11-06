@@ -235,11 +235,19 @@ void mod_account_info(char *name, size_t cap, uint32_t best[4]) {
     unlocked[2] = best[1] > 0, unlocked[3] = best[2] > 0;
 }
 
-// The menu's Expert / Super Expert tabs: a locked one doesn't open (the selection stays where it is).
+// The menu's Expert / Super Expert tabs: a locked one doesn't open. The tab handlers (main+0x1a22260 / +0x1a22320 /
+// +0x1a223e0 / +0x1a224a0, Easy .. Super Expert) also finish the menu's tab step (an event 0x7c queued, the map's
+// +0x290 set), so a locked press runs the handler of the tab already chosen (the last difficulty, main+0x2c3f618)
+// instead: the menu stays where it is and keeps taking input. Left out entirely, the menu stopped answering on
+// Windows with the SMM1 screens off (#77).
 static void tab_handler(Cpu *c, int d, uint64_t addr) {
     if (!mod_hundred() || difficulty_open(d)) { guest_call_orig(c, addr); return; }
     static const char *const names[4] = {"Easy", "Normal", "Expert", "Super Expert"};
-    LOG("[mod] %s is locked: complete a %s run first\n", names[d], names[d - 1]);
+    static const uint64_t handlers[4] = {0x1a22260, 0x1a22320, 0x1a223e0, 0x1a224a0};
+    int32_t cur = (int32_t)g32(MAIN_ADDR(0x2c3f618));
+    if (cur < 0 || cur > 3 || !difficulty_open(cur)) cur = 0;
+    LOG("[mod] %s is locked: complete a %s run first (%s stays)\n", names[d], names[d - 1], names[cur]);
+    guest_call_orig(c, MAIN_ADDR(handlers[cur]));
 }
 static void tab_expert(Cpu *c) { tab_handler(c, 2, MAIN_ADDR(0x1a223e0)); }
 static void tab_super_expert(Cpu *c) { tab_handler(c, 3, MAIN_ADDR(0x1a224a0)); }
