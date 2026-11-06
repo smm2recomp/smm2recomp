@@ -464,7 +464,7 @@ static void post_rating(Cpu *c) {
 // PostPlayResult (96, main+0x14e30e0): data id +0x8e618, cleared +0x8e620, time ms +0x8e624, u8 +0x8e628, u64 +0x8e630,
 // death position +0x8e638 / +0x8e63c, ... (plus a recording uploaded first [inf]). Our server counts a play, and a
 // clear with its time. Endless plays are counted by the Endless reports.
-bool endless_has_course(uint64_t id);  // endless.c
+bool endless_has_course(uint64_t id, bool clear);  // endless.c
 static void post_play_result(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0], id = g64(no + 0x8e618);
@@ -473,7 +473,7 @@ static void post_play_result(Cpu *c) {
     char code[12], path[64], body[64];
     course_code_of(id, code);
     LOG("[mod] play result %s: %s, %u ms (%u)\n", code, cleared == 1 ? "clear" : "no clear", time_ms, v2);
-    if (!endless_has_course(id)) {
+    if (!endless_has_course(id, cleared == 1)) {
         snprintf(path, sizeof path, "/api/courses/%s/play", code);
         post_ok(path, "{}");
         if (cleared == 1) {

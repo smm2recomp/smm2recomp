@@ -1390,10 +1390,13 @@ void endless_forget_run(int d) {
     cp_clear("run over");
 }
 
-bool endless_has_course(uint64_t id) {  // world.c: is this course the one an Endless run is on
+// world.c: is this play result an Endless run's (counted by the run's reports, not again)? For a clear, only a course
+// the run started (StartCourse seen) or just reported cleared: the run's next course (`current`, kept across Save &
+// Quit and restarts for Continue) cleared from Course World's played list is a normal clear, and was lost before (#83).
+bool endless_has_course(uint64_t id, bool clear) {
     pthread_mutex_lock(&state_lock);
     bool v = false;
-    for (int d = 0; d < 4; d++) v |= id && (runs[d].current == id || runs[d].started == id || runs[d].last_done == id);
+    for (int d = 0; d < 4; d++) v |= id && ((!clear && runs[d].current == id) || runs[d].started == id || runs[d].last_done == id);
     pthread_mutex_unlock(&state_lock);
     return v;
 }
