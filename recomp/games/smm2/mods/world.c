@@ -461,19 +461,19 @@ static void post_rating(Cpu *c) {
     finish(c, no, ok, 2);
 }
 
-// PostPlayResult (96, main+0x14e30e0): data id +0x8e618, cleared +0x8e620, time ms +0x8e624, u8 +0x8e628, u64 +0x8e630,
+// PostPlayResult (96, main+0x14e30e0): data id +0x8e618, +0x8e620 (1 or 5), time ms +0x8e624, u8 +0x8e628, u64 +0x8e630,
 // death position +0x8e638 / +0x8e63c, ... (plus a recording uploaded first [inf]). Our server counts a play, and a
 // clear with its time. Endless plays are counted by the Endless reports.
 bool endless_has_course(uint64_t id, bool clear);  // endless.c
 static void post_play_result(Cpu *c) {
     if (!mod_hundred()) { guest_call_orig(c, c->pc); return; }
     uint64_t no = c->x[0], id = g64(no + 0x8e618);
-    // [obs: a clear in 12.851 s posted 1 / 12851 / 1]: +0x8e620 cleared, +0x8e624 the time in ms
+    // [obs: a clear in 12.851 s posted 1 / 12851 / 1]: +0x8e624 the time in ms (+0x8e620: not the clear, below)
     uint32_t cleared = g32(no + 0x8e620), time_ms = g32(no + 0x8e624), v2 = g8(no + 0x8e628);
-    // [obs: every clear seen had 1 at +0x8e620; a play without a clear, no time (~0) and u8 0 or 2. But a clear of
-    // 9GW-PJP-X7G from the played list came with another value there, its time (31060 ms) and u8 1 (#83)]: a time
-    // with u8 1 is a clear too
-    bool clear = cleared == 1 || (time_ms != UINT32_MAX && v2 == 1);
+    // [obs: a clear comes with its time and u8 1 (+0x8e620 1 or 5: 9GW-PJP-X7G's clear had 5); a play without one has no
+    // time (~0) and u8 0 or 2, and +0x8e620 can be 1 there too (a miss on VWW-K76-62G: 1, ~0, 0) (#83)]: +0x8e620
+    // isn't the clear, the time and u8 1 are
+    bool clear = time_ms != UINT32_MAX && v2 == 1;
     char code[12], path[64], body[64];
     course_code_of(id, code);
     LOG("[mod] play result %s: %s, %u ms (%u, %u)\n", code, clear ? "clear" : "no clear", time_ms, v2, cleared);
