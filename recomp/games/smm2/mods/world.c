@@ -470,13 +470,17 @@ static void post_play_result(Cpu *c) {
     uint64_t no = c->x[0], id = g64(no + 0x8e618);
     // [obs: a clear in 12.851 s posted 1 / 12851 / 1]: +0x8e620 cleared, +0x8e624 the time in ms
     uint32_t cleared = g32(no + 0x8e620), time_ms = g32(no + 0x8e624), v2 = g8(no + 0x8e628);
+    // [obs: every clear seen had 1 at +0x8e620; a play without a clear, no time (~0) and u8 0 or 2. But a clear of
+    // 9GW-PJP-X7G from the played list came with another value there, its time (31060 ms) and u8 1 (#83)]: a time
+    // with u8 1 is a clear too
+    bool clear = cleared == 1 || (time_ms != UINT32_MAX && v2 == 1);
     char code[12], path[64], body[64];
     course_code_of(id, code);
-    LOG("[mod] play result %s: %s, %u ms (%u)\n", code, cleared == 1 ? "clear" : "no clear", time_ms, v2);
-    if (!endless_has_course(id, cleared == 1)) {
+    LOG("[mod] play result %s: %s, %u ms (%u, %u)\n", code, clear ? "clear" : "no clear", time_ms, v2, cleared);
+    if (!endless_has_course(id, clear)) {
         snprintf(path, sizeof path, "/api/courses/%s/play", code);
         post_ok(path, "{}");
-        if (cleared == 1) {
+        if (clear) {
             snprintf(path, sizeof path, "/api/courses/%s/clear", code);
             snprintf(body, sizeof body, "{\"time_ms\":%u}", time_ms);
             post_ok(path, body);
