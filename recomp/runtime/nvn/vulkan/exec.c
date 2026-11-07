@@ -1000,6 +1000,26 @@ static void pass_layout(const ExecState *s, PassLayout *out) {
     }
 }
 
+// Intel's legacy Windows driver for 6th-10th gen graphics (Vulkan 1.3.215 and older, 31.0.101.2xxx) still crashes
+// in vkCmdBeginRendering at igvk64.dll+5cfab2 on passes it took before (#56, #60: v0.7.7's log), so not on a pass's
+// shape. The guess: its clear at a pass's start (loadOp CLEAR) on some images. There the targets are loaded and
+// cleared inside the pass instead (vkCmdClearAttachments over the whole area: the same pixels).
+// LARECOMP_VK_CLEAR_IN_PASS=0/1 forces it off / on.
+static bool clear_in_pass(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("LARECOMP_VK_CLEAR_IN_PASS");
+#ifdef _WIN32
+        bool legacy = g_vk.props.vendorID == 0x8086 && g_vk.props.apiVersion <= VK_MAKE_API_VERSION(0, 1, 3, 215);
+#else
+        bool legacy = false;
+#endif
+        v = e ? atoi(e) != 0 : legacy;
+        if (v) LOG("[vk] clears inside the pass, not at its start%s (#60)\n", e ? "" : ": Intel's legacy driver");
+    }
+    return v;
+}
+
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
     int new_shape = 0;  // (a shape logged just now: said again once the driver took it, #60)
@@ -1092,27 +1112,38 @@ static void begin_pass(void) {
     }
     if (!w) { pass_sx = pass_sy = 1; minw = minh = 16; }
     pass_w = minw; pass_h = minh;
+    VkClearAttachment inpass[8];
+    uint32_t ninpass = 0, clearmask = 0;
+    for (uint32_t i = 0; i < pass_ncolor; i++) {
+        if (!ca[i].imageView || ca[i].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR) continue;
+        clearmask |= 1u << i;
+        if (!clear_in_pass()) continue;
+        inpass[ninpass++] = (VkClearAttachment){VK_IMAGE_ASPECT_COLOR_BIT, i, ca[i].clearValue};
+        ca[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    }
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}}, .layerCount = 1,
                           .colorAttachmentCount = pass_ncolor, .pColorAttachments = ca,
                           .pDepthAttachment = has_d ? &da : NULL, .pStencilAttachment = has_s ? &sa : NULL};
     {   // Each new pass shape once in the log (at most 64): Intel's legacy Windows driver still crashes in
         // vkCmdBeginRendering with no empty color slot in the pass (#60, v0.7.5), so the last such line before a crash
         // names the shape it doesn't take.
-        static struct { uint32_t n, s; VkFormat c[8], d, st; } seen[64];
+        // (v0.7.8: its size and which targets are cleared are part of it too: v0.7.7's crash came on a known shape)
+        static struct { uint32_t n, s, w, h, cm; VkFormat c[8], d, st; } seen[128];
         static int nseen;
         bool known = false;
         for (int k = 0; k < nseen && !known; k++)
             known = seen[k].n == pass_ncolor && seen[k].s == pass_samples && seen[k].d == pass_depth && seen[k].st == pass_stencil &&
-                    !memcmp(seen[k].c, pass_color, sizeof seen[k].c);
-        if (!known && nseen < 64) {
+                    seen[k].w == minw && seen[k].h == minh && seen[k].cm == clearmask && !memcmp(seen[k].c, pass_color, sizeof seen[k].c);
+        if (!known && nseen < 128) {
             seen[nseen].n = pass_ncolor, seen[nseen].s = pass_samples, seen[nseen].d = pass_depth, seen[nseen].st = pass_stencil;
+            seen[nseen].w = minw, seen[nseen].h = minh, seen[nseen].cm = clearmask;
             memcpy(seen[nseen].c, pass_color, sizeof seen[nseen].c);
             nseen++;
             char cs[96] = "";
             for (uint32_t i = 0; i < pass_ncolor; i++)
                 snprintf(cs + strlen(cs), sizeof cs - strlen(cs), " %d", ca[i].imageView ? (int)pass_color[i] : -1);
-            LOG("[vk] pass shape %d: %ux%u, %u color (formats%s), depth %d, stencil %d, %u samples, level %u\n", nseen, minw, minh,
-                pass_ncolor, cs, has_d ? (int)pass_depth : 0, has_s ? (int)pass_stencil : 0, pass_samples,
+            LOG("[vk] pass shape %d: %ux%u, %u color (formats%s, cleared %#x), depth %d, stencil %d, %u samples, level %u\n", nseen,
+                minw, minh, pass_ncolor, cs, clearmask, has_d ? (int)pass_depth : 0, has_s ? (int)pass_stencil : 0, pass_samples,
                 pass_ncolor && st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0);
             // (the first target's image and view: a crash right after this line, with no "began" one, is this shape's)
             NvnTexture *t0 = pass_ncolor ? st.rt.color[0] : has_d || has_s ? st.rt.depth : NULL;
@@ -1134,6 +1165,10 @@ static void begin_pass(void) {
     }
     vkCmdBeginRendering(cb, &ri);
     if (new_shape) LOG("[vk] pass shape %d began\n", new_shape);
+    if (ninpass) {
+        VkClearRect r = {{{0, 0}, {minw, minh}}, 0, 1};
+        vkCmdClearAttachments(cb, ninpass, inpass, 1, &r);
+    }
     ss_forget();  // (whatever ran between the passes may have set its own state)
     in_pass = true;
     vp_sx = pass_sx; vp_sy = pass_sy; vp_ox = 0; vp_oy = 0;
