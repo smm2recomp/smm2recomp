@@ -41,6 +41,7 @@ typedef struct {
     bool show_fps;
     bool show_memory;  // the app's memory use in the corner (menu.mm, platform.h plat_memory_used)
     bool dpad_move;      // the d-pad (and arrow keys) move Link like the stick
+    bool menu_ab_swap;   // a controller's A and B trade places in the game's menus, not in play (#84): runtime/hle/input.c
     bool pads_from_p2;   // every controller is player 2, 3, 4 (the keyboard / on-screen controls stay player 1):
                          // runtime/hle/input.c
     bool move_360;       // analog movement in any direction (the game snaps the stick to 8): runtime/hle/qol.c

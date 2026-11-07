@@ -872,6 +872,12 @@ static void tab_about(void) {
         settings_save();
         input_pads_reassign();
     }
+    if (opt_toggle("A and B swapped in menus", &g_settings.menu_ab_swap, false,
+                   "In the game's menus, a controller's A and B trade places, so the bottom button confirms and the "
+                   "right one goes back (the Xbox habit). While playing a course they stay as set below. The Course "
+                   "Maker counts as a menu while editing.")) {
+        settings_save();
+    }
     controls_bindings_draw(ImGui::GetFontSize() / 34);
     ImGui::Spacing();
     header("Menu");

@@ -66,6 +66,7 @@ WEAK void save_editor_frame(uint64_t frame) { (void)frame; }
 
 // ---- input (runtime/hle/input.c)
 WEAK bool mirror_input(void) { return false; }
+WEAK bool game_in_play(void) { return true; }  // the player is in play, not in a menu (menu_ab_swap: no menus known)
 WEAK uint64_t pets_menu_input(uint64_t b, int32_t st[4]) { (void)st; return b; }
 WEAK void input_note_rstick(int32_t ry) { (void)ry; }
 // test scripts' held stick / buttons (frame-limited; 0 = none)

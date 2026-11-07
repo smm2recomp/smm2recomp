@@ -753,7 +753,17 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
     uint64_t touch_b = 0;  // the on-screen controller (runtime/ui/touchpad.mm)
     int32_t touch_lx = 0, touch_ly = 0;
     if (!menu) touchpad_state(&touch_b, &touch_lx, &touch_ly);
-    uint64_t b = menu ? script_buttons : ((key_buttons | pad_buttons | touch_b) & game_input_mask()) | script_buttons;
+    uint64_t pb = pad_buttons;
+    {   // "A and B swapped in menus" (Controls, #84): a controller's A and B trade places while the game is in a menu
+        // (game_in_play false), so the bottom button confirms there; in play they stay as bound
+        extern bool game_in_play(void);
+        bool sw = g_settings.menu_ab_swap && !menu && !game_in_play();
+        static bool was;
+        if (sw != was) LOG("[input] A and B %s (menus)\n", sw ? "swapped" : "as bound");
+        was = sw;
+        if (sw) pb = (pb & ~3ull) | (pb >> BTN_A & 1) << BTN_B | (pb >> BTN_B & 1) << BTN_A;
+    }
+    uint64_t b = menu ? script_buttons : ((key_buttons | pb | touch_b) & game_input_mask()) | script_buttons;
     {   // injected Plus: held for ~10 presented frames (the game polls several times per frame)
         extern uint64_t renderer_present_count(void);
         static uint64_t until;

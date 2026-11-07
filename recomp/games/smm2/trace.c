@@ -116,8 +116,21 @@ static void finish(const char *why) {
     if (getenv("RECOMP_TRACE_EXIT")) { fflush(stderr); _exit(0); }
 }
 
+// In play or in a menu (runtime/hle/input.c's "A and B swapped in menus", #84): the player is updated each frame while
+// a course runs, and not in the game's menus (Course World, the title's menus, the Course Maker while editing) or
+// while it is paused. A few frames without an update: a menu.
+static _Atomic uint64_t g_player_frame;
+bool game_in_play(void) {
+    extern uint64_t renderer_present_count(void);
+    return renderer_present_count() < g_player_frame + 8;
+}
+
 void smm2_player_hook(Cpu *c) {
     uint64_t self = c->x[0];
+    {
+        extern uint64_t renderer_present_count(void);
+        g_player_frame = renderer_present_count();
+    }
     extern void costume_player_frame(Cpu *c, uint64_t player);  // (mods/costume.c: costumes, the taunt, the trigger)
     costume_player_frame(c, self);
     extern void lanky_player_frame(Cpu *c, uint64_t player);  // (mods/lanky.c: Lanky Mario's update)
