@@ -60,6 +60,7 @@ typedef struct {
     uint32_t qfam;
     VmaAllocator vma;
     VkPhysicalDeviceProperties props;
+    VkDriverId driver_id;  // (Intel's legacy Windows driver gets workarounds: exec.c dummy_depth_on)
     VkPipelineCache pcache;
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only

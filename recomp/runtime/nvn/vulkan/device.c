@@ -115,7 +115,14 @@ static void pick_device(void) {
     }
     free(qp);
     if (g_vk.qfam == UINT32_MAX) FATAL("no graphics+present queue\n");
-    LOG("[vk] using %s\n", g_vk.props.deviceName);
+    {   // which driver (Vulkan 1.2): Intel's legacy Windows one gets workarounds (exec.c dummy_depth_on, #60)
+        VkPhysicalDeviceDriverProperties dp = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &dp};
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &p2);
+        g_vk.driver_id = dp.driverID;
+        LOG("[vk] using %s: driver %s (%s), id %d, version %#x\n", g_vk.props.deviceName, dp.driverName, dp.driverInfo,
+            (int)dp.driverID, g_vk.props.driverVersion);
+    }
 }
 
 static bool g_fault_ext;

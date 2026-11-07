@@ -974,6 +974,9 @@ static void vk_end_pass_at(int line) {
 
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
 
+static bool dummy_depth_on(void);  // (Intel's legacy Windows driver: below)
+#define DUMMY_DEPTH_FORMAT VK_FORMAT_D32_SFLOAT  // (every Vulkan driver takes it as a depth attachment; the game's own)
+
 // (predicted: no view made, no pass begun - the prefetch scan's; a texture not made yet from its NVN format)
 static void pass_layout(const ExecState *s, PassLayout *out) {
     memset(out, 0, sizeof *out);
@@ -998,26 +1001,52 @@ static void pass_layout(const ExecState *s, PassLayout *out) {
         if (a & VK_IMAGE_ASPECT_STENCIL_BIT) out->stencil = f;
         if (!out->ncolor) out->samples = b ? b->samples : (d->samples > 1 ? d->samples : 1);
     }
+    if (!out->depth && !out->stencil && dummy_depth_on()) out->depth = DUMMY_DEPTH_FORMAT;  // (as begin_pass)
 }
 
-// Intel's legacy Windows driver for 6th-10th gen graphics (Vulkan 1.3.215 and older, 31.0.101.2xxx) still crashes
-// in vkCmdBeginRendering at igvk64.dll+5cfab2 on passes it took before (#56, #60: v0.7.7's log), so not on a pass's
-// shape. The guess: its clear at a pass's start (loadOp CLEAR) on some images. There the targets are loaded and
-// cleared inside the pass instead (vkCmdClearAttachments over the whole area: the same pixels).
-// LARECOMP_VK_CLEAR_IN_PASS=0/1 forces it off / on.
-static bool clear_in_pass(void) {
+// Intel's legacy Windows driver for 6th-10th gen graphics (31.0.101.2xxx, Vulkan 1.3.215, the last one for those
+// chips) crashes in vkCmdBeginRendering, a null read at igvk64.dll+5cfab2 (#56, #60). Read out of that driver
+// (31.0.101.2115): its per-command-buffer render state has a table of attachment records (56 bytes each, the colour
+// targets first, the depth / stencil one right after them) and a "has depth or stencil" flag. Its attachment setup
+// writes the colour records every pass but the depth record and the flag only when the pass has a depth or stencil
+// attachment; nothing clears the flag (vkCmdEndRendering resets other fields). So after the first pass with a depth
+// target, every colour-only pass reads the record at index colorAttachmentCount as its depth attachment: whatever an
+// earlier pass of that command buffer left there, or, if none ever wrote it, null (the image view pointer) - the
+// crash. SMM2 hits it at the first two-target pass (the Mii icons) after a 3D pass. So, on that driver, a pass without
+// a depth or stencil target gets a dummy depth attachment (DONT_CARE in and out; the depth and stencil tests stay off,
+// as with no target): the flag and the record always agree. The pipelines of those passes carry its format.
+// LARECOMP_VK_DUMMY_DEPTH=0 / 1 forces it off / on.
+static bool dummy_depth_on(void) {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("LARECOMP_VK_CLEAR_IN_PASS");
-#ifdef _WIN32
-        bool legacy = g_vk.props.vendorID == 0x8086 && g_vk.props.apiVersion <= VK_MAKE_API_VERSION(0, 1, 3, 215);
-#else
-        bool legacy = false;
-#endif
+        const char *e = getenv("LARECOMP_VK_DUMMY_DEPTH");
+        bool legacy = g_vk.driver_id == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS && g_vk.props.apiVersion < VK_MAKE_API_VERSION(0, 1, 3, 250);
         v = e ? atoi(e) != 0 : legacy;
-        if (v) LOG("[vk] clears inside the pass, not at its start%s (#60)\n", e ? "" : ": Intel's legacy driver");
+        if (v) LOG("[vk] passes without a depth target get a dummy one%s (#60)\n", e ? "" : ": Intel's legacy driver");
     }
     return v;
+}
+static bool pass_real_depth, pass_real_stencil;  // the game's targets (pass_depth may be the dummy's format)
+static VkImageView dummy_depth_view(uint32_t w, uint32_t h, uint32_t samples) {
+    static struct { VkImage img; VmaAllocation mem; VkImageView view; uint32_t w, h; } d[5];  // per sample count
+    int k = 0;
+    while (k < 4 && (1u << k) < samples) k++;
+    if (d[k].view && d[k].w >= w && d[k].h >= h) return d[k].view;
+    if (d[k].view) { vk_defer_view(d[k].view); vk_defer_image(d[k].img, d[k].mem); }  // (grown: at least every pass's size)
+    uint32_t nw = d[k].w > w ? d[k].w : w, nh = d[k].h > h ? d[k].h : h;
+    VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = DUMMY_DEPTH_FORMAT,
+                            .extent = {nw, nh, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = (VkSampleCountFlagBits)(1u << k),
+                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &d[k].img, &d[k].mem, NULL));
+    vk_image_init_layout(vk_upload_cmd(), d[k].img, VK_IMAGE_ASPECT_DEPTH_BIT);
+    VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = d[k].img, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                .format = DUMMY_DEPTH_FORMAT, .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1}};
+    VK_CHECK(vkCreateImageView(g_vk.dev, &vi, NULL, &d[k].view));
+    d[k].w = nw, d[k].h = nh;
+    LOG("[vk] dummy depth attachment %ux%u, %u samples\n", nw, nh, 1u << k);
+    return d[k].view;
 }
 
 // The last passes begun, for a crash report (rt_fault_report: renderer_crash_note). Intel's legacy Windows driver
@@ -1148,15 +1177,17 @@ static void begin_pass(void) {
     }
     if (!w) { pass_sx = pass_sy = 1; minw = minh = 16; }
     pass_w = minw; pass_h = minh;
-    VkClearAttachment inpass[8];
-    uint32_t ninpass = 0, clearmask = 0;
-    for (uint32_t i = 0; i < pass_ncolor; i++) {
-        if (!ca[i].imageView || ca[i].loadOp != VK_ATTACHMENT_LOAD_OP_CLEAR) continue;
-        clearmask |= 1u << i;
-        if (!clear_in_pass()) continue;
-        inpass[ninpass++] = (VkClearAttachment){VK_IMAGE_ASPECT_COLOR_BIT, i, ca[i].clearValue};
-        ca[i].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    pass_real_depth = has_d; pass_real_stencil = has_s;
+    if (!has_d && !has_s && dummy_depth_on()) {
+        da = (VkRenderingAttachmentInfo){.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                         .imageView = dummy_depth_view(minw, minh, pass_samples), .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                                         .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE, .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE};
+        has_d = true;
+        pass_depth = DUMMY_DEPTH_FORMAT;
     }
+    uint32_t clearmask = 0;
+    for (uint32_t i = 0; i < pass_ncolor; i++)
+        if (ca[i].imageView && ca[i].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR) clearmask |= 1u << i;
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {minw, minh}}, .layerCount = 1,
                           .colorAttachmentCount = pass_ncolor, .pColorAttachments = ca,
                           .pDepthAttachment = has_d ? &da : NULL, .pStencilAttachment = has_s ? &sa : NULL};
@@ -1206,9 +1237,9 @@ static void begin_pass(void) {
         for (uint32_t i = 0; i < pass_ncolor && i < 8; i++)
             pass_note_target(pn, (int)i, st.rt.color[i], &st.rt.cview[i], st.rt.has_cview[i], ca[i].imageView, (int)pass_color[i],
                              (uint32_t)ca[i].loadOp);
-        if (has_d || has_s)
-            pass_note_target(pn, 8, st.rt.depth, &st.rt.dview, st.rt.has_dview, has_d ? da.imageView : sa.imageView,
-                             has_d ? (int)pass_depth : (int)pass_stencil, 0);
+        if (pass_real_depth || pass_real_stencil)
+            pass_note_target(pn, 8, st.rt.depth, &st.rt.dview, st.rt.has_dview, pass_real_depth ? da.imageView : sa.imageView,
+                             pass_real_depth ? (int)pass_depth : (int)pass_stencil, 0);
         pass_note_n++;
         // (a target whose image wasn't made for drawing into: invalid, and a driver may have nothing to draw with)
         static int said_usage;
@@ -1219,10 +1250,6 @@ static void begin_pass(void) {
     }
     vkCmdBeginRendering(cb, &ri);
     if (new_shape) LOG("[vk] pass shape %d began\n", new_shape);
-    if (ninpass) {
-        VkClearRect r = {{{0, 0}, {minw, minh}}, 0, 1};
-        vkCmdClearAttachments(cb, ninpass, inpass, 1, &r);
-    }
     ss_forget();  // (whatever ran between the passes may have set its own state)
     in_pass = true;
     vp_sx = pass_sx; vp_sy = pass_sy; vp_ox = 0; vp_oy = 0;
@@ -1392,7 +1419,7 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
             memcpy(a[n].clearValue.color.float32, color, 16);
             n++;
         }
-        VkImageAspectFlags dsa = (depth && pass_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil && pass_stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
+        VkImageAspectFlags dsa = (depth && pass_real_depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil && pass_real_stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0);
         if (dsa) a[n++] = (VkClearAttachment){.aspectMask = dsa, .clearValue.depthStencil = {dval, sval}};
         VkClearRect cr = {rect, 0, 1};
         if (n) vkCmdClearAttachments(cb, n, a, 1, &cr);
@@ -3295,7 +3322,7 @@ static void draw_(CmdRec *r, bool indexed) {
     // ---- depth / stencil (dynamic)
     static int nodt = -1;
     if (nodt < 0) nodt = getenv("LARECOMP_NO_DEPTH_TEST") != NULL;
-    bool dt = st.ds[0] && !nodt && pass_depth;
+    bool dt = st.ds[0] && !nodt && pass_real_depth;  // (not the dummy depth attachment: no target, no test)
     if (ss_need(SS_DT, ss.dt == (VkBool32)dt)) { ss.dt = dt; vkCmdSetDepthTestEnable(cb, dt); }
     VkBool32 dw = dt && st.ds[1];
     if (ss_need(SS_DW, ss.dw == dw)) { ss.dw = dw; vkCmdSetDepthWriteEnable(cb, dw); }
@@ -3310,7 +3337,7 @@ static void draw_(CmdRec *r, bool indexed) {
     bool equal_tol = dop == VK_COMPARE_OP_EQUAL && tol;
     if (equal_tol) dop = VK_COMPARE_OP_LESS_OR_EQUAL;
     if (ss_need(SS_DOP, ss.dop == dop)) { ss.dop = dop; vkCmdSetDepthCompareOp(cb, dop); }
-    bool sten = st.ds[3] && pass_stencil;
+    bool sten = st.ds[3] && pass_real_stencil;
     if (ss_need(SS_STEN, ss.sten == (VkBool32)sten)) { ss.sten = sten; vkCmdSetStencilTestEnable(cb, sten); }
     if (sten) {
         uint32_t ops = st.ds[5] | st.ds[6] << 8 | st.ds[7] << 16;
