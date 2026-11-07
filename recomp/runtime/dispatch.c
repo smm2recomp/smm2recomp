@@ -313,12 +313,15 @@ bool rt_fault_watch(uint64_t fa, uint64_t pc) {
     return true;
 }
 
+__attribute__((weak)) void renderer_crash_note(void) {}  // (the Vulkan renderer's last passes: exec.c, #60)
+
 void rt_fault_report(const char *what, uint64_t fa, uint64_t pc, uint64_t lr) {
     uint64_t po = 0, lo = 0;
     const char *ps = host_sym(pc, &po), *ls = host_sym(lr, &lo);
     fprintf(stderr, "\n*** %s accessing %#llx\n    host pc %llx (%s+%llx)\n    host lr %llx (%s)\n", what,
             (unsigned long long)fa, (unsigned long long)pc, ps ? ps : "?", (unsigned long long)po,
             (unsigned long long)lr, ls ? ls : "?");
+    renderer_crash_note();
     rt_fatal_trace();
 }
 

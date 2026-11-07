@@ -1020,6 +1020,42 @@ static bool clear_in_pass(void) {
     return v;
 }
 
+// The last passes begun, for a crash report (rt_fault_report: renderer_crash_note). Intel's legacy Windows driver
+// crashes in vkCmdBeginRendering on passes whose shape it took before (#60, v0.7.8), so the report names the targets of
+// the one it was given: views, images, formats, the image's usage, level / layer and the texture.
+typedef struct {
+    uint64_t n;
+    uint32_t w, h, ncolor;
+    struct { void *view, *image, *tex; int vfmt, ifmt; uint32_t usage, lv, ly, load, w, h; char label[24]; } t[9];  // [8] depth
+} PassNote;
+static PassNote pass_notes[8];
+static uint64_t pass_note_n;
+void renderer_crash_note(void) {
+    if (!pass_note_n) return;
+    fprintf(stderr, "last passes begun (the last one is the one being begun):\n");
+    for (uint64_t k = pass_note_n > 8 ? pass_note_n - 8 : 0; k < pass_note_n; k++) {
+        const PassNote *p = &pass_notes[k % 8];
+        fprintf(stderr, "  pass %llu: %ux%u, %u color\n", (unsigned long long)p->n, p->w, p->h, p->ncolor);
+        for (int i = 0; i < 9; i++) {
+            if (!p->t[i].view && !p->t[i].tex) continue;
+            fprintf(stderr, "    %s%d view %p image %p (%ux%u) view fmt %d image fmt %d usage %#x level %u layer %u load %u tex %p %s\n",
+                    i == 8 ? "depth " : "c", i == 8 ? 0 : i, p->t[i].view, p->t[i].image, p->t[i].w, p->t[i].h, p->t[i].vfmt,
+                    p->t[i].ifmt, p->t[i].usage, p->t[i].lv, p->t[i].ly, p->t[i].load, p->t[i].tex, p->t[i].label);
+        }
+    }
+    fflush(stderr);
+}
+static void pass_note_target(PassNote *p, int i, NvnTexture *t, const NvnTextureView *v, bool has_v, VkImageView view,
+                             int vfmt, uint32_t load) {
+    TexBackend *b = t ? t->backend : NULL;
+    p->t[i].view = (void *)view, p->t[i].tex = t, p->t[i].vfmt = vfmt, p->t[i].load = load;
+    p->t[i].image = b ? (void *)b->image : NULL;
+    p->t[i].ifmt = b ? (int)b->format : 0, p->t[i].usage = b ? b->usage : 0, p->t[i].w = b ? b->width : 0, p->t[i].h = b ? b->height : 0;
+    p->t[i].lv = has_v && (v->setmask & 1) ? v->base_level : 0;
+    p->t[i].ly = has_v && (v->setmask & 2) ? v->min_layer : 0;
+    snprintf(p->t[i].label, sizeof p->t[i].label, "%s", t ? t->label : "");
+}
+
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
     int new_shape = 0;  // (a shape logged just now: said again once the driver took it, #60)
@@ -1162,6 +1198,24 @@ static void begin_pass(void) {
         LOG("[pass] begin %ux%u:", minw, minh);
         for (uint32_t i = 0; i < pass_ncolor; i++) LOG(" c%u(view %p fmt %d load %d tex %p)", i, (void *)ca[i].imageView, pass_color[i], ca[i].loadOp, (void *)st.rt.color[i]);
         LOG(" depth %d\n", has_d);
+    }
+    {
+        PassNote *pn = &pass_notes[pass_note_n % 8];
+        memset(pn, 0, sizeof *pn);
+        pn->n = pass_note_n + 1, pn->w = minw, pn->h = minh, pn->ncolor = pass_ncolor;
+        for (uint32_t i = 0; i < pass_ncolor && i < 8; i++)
+            pass_note_target(pn, (int)i, st.rt.color[i], &st.rt.cview[i], st.rt.has_cview[i], ca[i].imageView, (int)pass_color[i],
+                             (uint32_t)ca[i].loadOp);
+        if (has_d || has_s)
+            pass_note_target(pn, 8, st.rt.depth, &st.rt.dview, st.rt.has_dview, has_d ? da.imageView : sa.imageView,
+                             has_d ? (int)pass_depth : (int)pass_stencil, 0);
+        pass_note_n++;
+        // (a target whose image wasn't made for drawing into: invalid, and a driver may have nothing to draw with)
+        static int said_usage;
+        for (uint32_t i = 0; i < pass_ncolor && i < 8; i++)
+            if (ca[i].imageView && !(pn->t[i].usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) && said_usage++ < 5)
+                LOG("[vk] a pass draws into an image without colour attachment usage (fmt %d, view fmt %d, %s)\n", pn->t[i].ifmt,
+                    pn->t[i].vfmt, pn->t[i].label);
     }
     vkCmdBeginRendering(cb, &ri);
     if (new_shape) LOG("[vk] pass shape %d began\n", new_shape);
