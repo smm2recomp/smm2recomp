@@ -1002,6 +1002,7 @@ static void pass_layout(const ExecState *s, PassLayout *out) {
 
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
+    int new_shape = 0;  // (a shape logged just now: said again once the driver took it, #60)
     vk_end_pass();
     if (dl_on == 2) renderer_flush();  // (LARECOMP_VK_DEVLOST_TRACE=2: each pass its own submission)
     st.rt_dirty = false;
@@ -1113,6 +1114,17 @@ static void begin_pass(void) {
             LOG("[vk] pass shape %d: %ux%u, %u color (formats%s), depth %d, stencil %d, %u samples, level %u\n", nseen, minw, minh,
                 pass_ncolor, cs, has_d ? (int)pass_depth : 0, has_s ? (int)pass_stencil : 0, pass_samples,
                 pass_ncolor && st.rt.has_cview[0] && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0);
+            // (the first target's image and view: a crash right after this line, with no "began" one, is this shape's)
+            NvnTexture *t0 = pass_ncolor ? st.rt.color[0] : has_d || has_s ? st.rt.depth : NULL;
+            const NvnTextureView *v0 = pass_ncolor ? (st.rt.has_cview[0] ? &st.rt.cview[0] : NULL) : (st.rt.has_dview ? &st.rt.dview : NULL);
+            if (t0 && t0->backend) {
+                TexBackend *b = t0->backend;
+                LOG("[vk] pass shape %d image: %ux%ux%u, %u layers, %u levels, type %d, nvn format %#x; view mask %#x, "
+                    "levels %u+%u, layers %u+%u\n", nseen, b->width, b->height, b->depth, b->layers, b->levels, (int)b->base_type,
+                    t0->format, v0 ? v0->setmask : 0, v0 ? v0->base_level : 0, v0 ? v0->num_levels : 0, v0 ? v0->min_layer : 0,
+                    v0 ? v0->num_layers : 0);
+            }
+            new_shape = nseen;
         }
     }
     if (g_debug_frame) {
@@ -1121,6 +1133,7 @@ static void begin_pass(void) {
         LOG(" depth %d\n", has_d);
     }
     vkCmdBeginRendering(cb, &ri);
+    if (new_shape) LOG("[vk] pass shape %d began\n", new_shape);
     ss_forget();  // (whatever ran between the passes may have set its own state)
     in_pass = true;
     vp_sx = pass_sx; vp_sy = pass_sy; vp_ox = 0; vp_oy = 0;
