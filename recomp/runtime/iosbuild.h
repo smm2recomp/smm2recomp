@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 typedef struct {
-    bool game_files;  // copy extracted/{exefs,romfs}, fonts, sysdata into the app's data/ (about 3 GB)
+    bool game_files;  // copy extracted/{exefs,romfs}, fonts, sysdata (and the SMM1 dump if one was chosen) into the app's data/ (about 3 GB, 4.2 with SMM1)
     const char *out;  // the .ipa to write (replaced)
     // from the calling thread: the step ("Checking", "Building the game code", "Linking", "Copying the game files",
     // "Signing", "Packing") and how far the whole build is (0..1)

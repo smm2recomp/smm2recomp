@@ -84,7 +84,7 @@ static void fail(const char *msg) {
 // sysdata, and metallib: precompiled shaders) links them into Documents at every launch, since the app's own path
 // changes with each install; files the player copied into Documents themselves are left alone.
 static void ios_link_bundle_data(void) {
-    static const char *const names[] = {"extracted", "fonts", "sysdata", "metallib"};
+    static const char *const names[] = {"extracted", "fonts", "sysdata", "metallib", "smm1"};  // (smm1: iosbuild.c)
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
         char target[1100];
         snprintf(target, sizeof target, "%s/data/%s", g_exe_dir, names[i]);

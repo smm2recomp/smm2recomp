@@ -26,9 +26,12 @@ From Terminal, the same build:
     "/Applications/Super Mario Maker 2.app/Contents/MacOS/smm2recomp" --build-ios [--no-game-files] [<file.ipa>]
 
 **Include the game files** (on by default) puts them in the app, about 3 GB: there is nothing to copy
-afterwards. Without them the app is small, and you copy `extracted/`, `fonts/` and `sysdata/` from the
-Mac app's data folder (`~/Library/Application Support/org.smcraft.smm2recomp`) into the app's Documents
-folder yourself, with Finder (your device in the sidebar, then Files) or the Files app.
+afterwards. If you chose a Super Mario Maker (Wii U) dump on the setup screen, it goes in too (about
+1.2 GB more), for the SMM1 mods: the 100 Mario Challenge and the costumes. Without the game files the app
+is small, and you copy `extracted/`, `fonts/` and `sysdata/` from the Mac app's data folder
+(`~/Library/Application Support/org.smcraft.smm2recomp`) into the app's Documents folder yourself, with
+Finder (your device in the sidebar, then Files) or the Files app. For the SMM1 mods, also copy your
+decrypted SMM1 dump into a `smm1/` folder there.
 
 The `.ipa` contains your game. Keep it for your own devices, and don't share it.
 

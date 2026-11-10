@@ -2,6 +2,7 @@
 #include "iosbuild.h"
 
 #include <copyfile.h>
+#include <dirent.h>
 #include <glob.h>
 #include <errno.h>
 #include <ftw.h>
@@ -172,6 +173,75 @@ static bool clone_tree(const char *src, const char *dst) {
 }
 
 static bool copy_file(const char *src, const char *dst) { return copyfile(src, dst, NULL, COPYFILE_CLONE) == 0; }
+
+// The SMM1 dump (optional, for the SMM1 mods: 100 Mario, the costumes; #88): the Super Mario Maker titles in the
+// folder the player chose on the setup screen (launcher.ini smm1=, or RECOMP_SMM1_DUMP), found as smm1_data.c finds
+// them: a meta/meta.xml with Super Mario Maker's title id next to content/. Each one's meta/ and content/ go into
+// the app's data/smm1/<n>/ (code/ is never read); runtime/paths.c links data/smm1 into Documents, where smm1_data.c
+// looks. About 1.2 GB with the update.
+static bool smm1_title(const char *dir) {
+    char meta[1200], content[1200];
+    snprintf(meta, sizeof meta, "%s/meta/meta.xml", dir);
+    snprintf(content, sizeof content, "%s/content", dir);
+    struct stat st;
+    if (stat(content, &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    FILE *f = fopen(meta, "rb");
+    if (!f) return false;
+    char x[8192];
+    size_t n = fread(x, 1, sizeof x - 1, f);
+    fclose(f);
+    x[n] = 0;
+    char *t = strstr(x, "<title_id");
+    if (!t || !(t = strchr(t, '>')) || strlen(t + 1) < 16) return false;
+    char id[17] = {0};
+    memcpy(id, t + 1, 16);
+    for (char *q = id; *q; q++) *q = (char)(*q >= 'a' && *q <= 'f' ? *q - 32 : *q);
+    return !strcmp(id + 8, "1018DC00") || !strcmp(id + 8, "1018DD00") || !strcmp(id + 8, "1014B700");
+}
+static void smm1_find(const char *dir, int depth, char (*out)[1100], int *nout) {
+    if (*nout >= 8) return;
+    for (int i = 0; i < *nout; i++)
+        if (!strcmp(out[i], dir)) return;
+    if (smm1_title(dir)) { snprintf(out[(*nout)++], 1100, "%s", dir); return; }
+    if (depth <= 0) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char sub[1100];
+        struct stat st;
+        snprintf(sub, sizeof sub, "%s/%s", dir, e->d_name);
+        if (stat(sub, &st) == 0 && S_ISDIR(st.st_mode)) smm1_find(sub, depth - 1, out, nout);
+    }
+    closedir(d);
+}
+static int smm1_titles(const char *data_root, char (*out)[1100]) {
+    int nout = 0;
+    char roots[4096] = "";
+    const char *env = getenv("RECOMP_SMM1_DUMP");
+    if (env && *env) snprintf(roots, sizeof roots, "%s", env);
+    else {  // the setup screen's choice (paths only)
+        char ini[1100], line[4200];
+        snprintf(ini, sizeof ini, "%s/launcher.ini", data_root);
+        FILE *f = fopen(ini, "r");
+        while (f && fgets(line, sizeof line, f)) {
+            if (strncmp(line, "smm1=", 5)) continue;
+            line[strcspn(line, "\r\n")] = 0;
+            snprintf(roots, sizeof roots, "%s", line + 5);
+        }
+        if (f) fclose(f);
+    }
+    for (char *s = roots, *e; s && *s; s = e ? e + 1 : NULL) {
+        e = strchr(s, ':');
+        if (e) *e = 0;
+        smm1_find(s, 3, out, &nout);
+    }
+    char own[1100];
+    snprintf(own, sizeof own, "%s/smm1", data_root);  // (a dump put in the data folder itself)
+    if (!nout) smm1_find(own, 3, out, &nout);
+    return nout;
+}
 
 // ------------------------------------------------------------------ the build
 static const IosBuildOpts *g_opts;
@@ -352,6 +422,23 @@ bool iosbuild_run(const char *data_root, const IosBuildOpts *o, char *why, size_
             snprintf(p, sizeof p, "%s/%s", data_root, from[i]);
             snprintf(d, sizeof d, "%s/data/%s", app, from[i]);
             ok = clone_tree(p, d);
+        }
+        char titles[8][1100];
+        int nt = ok ? smm1_titles(data_root, titles) : 0;
+        if (nt) {
+            snprintf(d, sizeof d, "%s/data/smm1", app), ok = mkdir(d, 0755) == 0;
+            for (int i = 0; ok && i < nt; i++) {
+                static const char *const sub[] = {"meta", "content"};
+                snprintf(d, sizeof d, "%s/data/smm1/%d", app, i), ok = mkdir(d, 0755) == 0;
+                for (int k = 0; ok && k < 2; k++) {
+                    snprintf(p, sizeof p, "%s/%s", titles[i], sub[k]);
+                    snprintf(d, sizeof d, "%s/data/smm1/%d/%s", app, i, sub[k]);
+                    ok = clone_tree(p, d);
+                }
+                LOG("[iosbuild] SMM1 dump: %s%s\n", titles[i], ok ? "" : " (failed)");
+            }
+        } else if (ok) {
+            LOG("[iosbuild] no SMM1 dump chosen: the SMM1 mods (100 Mario, costumes) stay off on the device\n");
         }
         if (!ok) snprintf(why, n, gamebuild_cancelled() ? "cancelled" : "the game files couldn't be copied into the app");
     }
