@@ -350,8 +350,9 @@ int net_backend_options(const NetBackendOption **out) {
       nextendo_available},                                                                                            \
      {NET_BACKEND_OCW, "ocw", "OpenCourse World",                                                                     \
       "Course World against your own OpenCourse World account: the game's own online code talks to OCW's server. "  \
-      "Needs its domain and your personal token (below). The only backend that reaches a public host, and it "       \
-      "reaches that one host only, with its certificate checked.", true}}
+      "Needs its domain and your personal token (below). 100 Mario is off with it: OCW answers the Endless "         \
+      "Challenge. The only backend that reaches a public host, and it reaches that one host only, with its "         \
+      "certificate checked.", true}}
     static NetBackendOption signed_out[] = OPTS(false), signed_in[] = OPTS(true);
 #undef OPTS
     // The local test server only where one is set up (nex_test_server): a player stepping through the list landed on
