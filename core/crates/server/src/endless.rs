@@ -928,21 +928,22 @@ mod tests {
             (a["lives"].as_u64(), a["passed"].as_u64()),
             (Some(6), Some(2))
         );
+        // the map's history: clears only, a skip stays off it (#83)
         let (_, h) = call(&store, "GET", "/api/endless/easy/history", me, "");
         let h = h["history"].as_array().unwrap();
-        assert_eq!(h.len(), 2);
+        assert_eq!(h.len(), 1);
         assert_eq!(
-            (h[0]["result"].as_str(), h[0]["seq"].as_u64()),
-            (Some("clear"), Some(1))
-        );
-        assert_eq!(
-            (h[1]["result"].as_str(), h[1]["code"].as_str()),
-            (Some("skip"), Some(batch[1].as_str()))
+            (
+                h[0]["result"].as_str(),
+                h[0]["seq"].as_u64(),
+                h[0]["code"].as_str()
+            ),
+            (Some("clear"), Some(1), Some(batch[0].as_str()))
         );
         // with each course's name and maker (a continued run's credits)
-        let m = store.get(&batch[1]).unwrap();
+        let m = store.get(&batch[0]).unwrap();
         assert_eq!(
-            (h[1]["name"].as_str(), h[1]["maker"].as_str()),
+            (h[0]["name"].as_str(), h[0]["maker"].as_str()),
             (Some(m.name.as_str()), Some(m.maker.as_str()))
         );
         // suspend and status

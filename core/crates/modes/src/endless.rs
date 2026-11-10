@@ -569,8 +569,10 @@ impl Run {
     }
 }
 
-/// How a course left the run, for the history ring and the map icons (§5.2; the binary's own
-/// result values are not decoded, §7 item 9).
+/// How a course left the run (§5.2; the binary's own result values are not decoded, §7 item 9).
+/// The ring holds clears only: the game pushes a local entry on a clear (sequence = last + 1) and
+/// none on a skip, and its map draws every entry alike, so a skip in the ring would move the map
+/// Mario ahead of the clear count after the next reload (#83). `Skip` is still read from old saves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryResult {
     Clear,
@@ -803,7 +805,7 @@ impl RunRecord {
         self.history.push_back(HistoryEntry {
             code: code.to_string(),
             result,
-            seq: self.status.passed,
+            seq: self.status.clears,
             style: style.to_string(),
             theme,
         });
@@ -856,7 +858,6 @@ impl RunRecord {
                     s.lives = s.lives.saturating_sub(r.during_miss as u32);
                 }
                 s.passed = (s.passed + 1).min(COUNT_CAP);
-                self.push_history(&r.code, HistoryResult::Skip, style, theme);
                 self.pass(&r.code);
             }
             _ => self.pass(&r.code),
@@ -899,15 +900,25 @@ impl RunRecord {
                 })
                 .unwrap_or_default()
         };
+        let status = RunStatus::from_json(v);
         let mut history: VecDeque<HistoryEntry> = v["history"]
             .as_array()
             .map(|a| a.iter().filter_map(HistoryEntry::from_json).collect())
             .unwrap_or_default();
+        if history.iter().any(|e| e.result == HistoryResult::Skip) {
+            // a save from before v0.7.12 (skips in the ring, numbered by courses passed): keep
+            // the clears and number them up to the run's clear count
+            history.retain(|e| e.result == HistoryResult::Clear);
+            let n = history.len() as u32;
+            for (i, e) in history.iter_mut().enumerate() {
+                e.seq = (status.clears + 1 + i as u32).saturating_sub(n).max(1);
+            }
+        }
         while history.len() > HISTORY {
             history.pop_front();
         }
         Self {
-            status: RunStatus::from_json(v),
+            status,
             history,
             played: ids("played"),
             queue: ids("queue"),
@@ -1833,19 +1844,13 @@ mod tests {
         assert_eq!(rec.report(&b, "M1", 0, 104).unwrap().lives, 6);
         assert_eq!(rec.played, ["a", "b", "c"]);
         assert!(rec.queue.is_empty());
+        // skips stay off the map (#83)
         let h: Vec<_> = rec
             .history
             .iter()
             .map(|e| (e.code.as_str(), e.result, e.seq))
             .collect();
-        assert_eq!(
-            h,
-            [
-                ("a", HistoryResult::Clear, 1),
-                ("b", HistoryResult::Skip, 2),
-                ("c", HistoryResult::Skip, 3)
-            ]
-        );
+        assert_eq!(h, [("a", HistoryResult::Clear, 1)]);
         assert_eq!(rec.history[0].style, "M3");
         assert_eq!(rec.status.updated_at, 104);
         // broken: passed over, nothing counted
@@ -1853,7 +1858,7 @@ mod tests {
         let a = rec
             .report(&rep("d", Outcome::Broken), "M1", 0, 105)
             .unwrap();
-        assert_eq!((a.lives, a.passed, rec.history.len()), (6, 3, 3));
+        assert_eq!((a.lives, a.passed, rec.history.len()), (6, 3, 1));
         // game over
         rec.enqueue(["e".to_string()], true);
         assert!(rec.status.widened);
@@ -1867,6 +1872,39 @@ mod tests {
             rec.report(&rep("e", Outcome::Death), "M1", 0, 108),
             Err(RunError::NotActive)
         );
+    }
+
+    #[test]
+    fn old_save_drops_skips_from_the_map() {
+        // before v0.7.12 skips were in the ring, numbered by courses passed (#83)
+        let mut rec = RunRecord::new(5, 0, 0);
+        for (id, o) in [
+            ("a", Outcome::Clear),
+            ("b", Outcome::Clear),
+            ("c", Outcome::Skip),
+            ("d", Outcome::Skip),
+            ("e", Outcome::Clear),
+        ] {
+            rec.enqueue([id.to_string()], false);
+            rec.report(&rep(id, o), "M1", 0, 0).unwrap();
+        }
+        let mut v = rec.to_json();
+        v["history"] = json!([
+            {"code": "a", "result": "clear", "seq": 1, "style": "M1", "theme": 0},
+            {"code": "b", "result": "clear", "seq": 2, "style": "M1", "theme": 0},
+            {"code": "c", "result": "skip", "seq": 3, "style": "M1", "theme": 0},
+            {"code": "d", "result": "skip", "seq": 4, "style": "M1", "theme": 0},
+            {"code": "e", "result": "clear", "seq": 5, "style": "M1", "theme": 0},
+        ]);
+        let back = RunRecord::from_json(&v);
+        let h: Vec<_> = back
+            .history
+            .iter()
+            .map(|e| (e.code.as_str(), e.seq))
+            .collect();
+        assert_eq!(h, [("a", 1), ("b", 2), ("e", 3)]);
+        assert_eq!((back.status.clears, back.status.passed), (3, 5));
+        assert_eq!(RunRecord::from_json(&rec.to_json()).history, rec.history);
     }
 
     #[test]
@@ -2075,7 +2113,6 @@ mod tests {
         );
         assert_eq!(st.best, 1);
         // skip
-        let second = s.current().unwrap().id.clone();
         s.add_coins(5);
         assert_eq!(s.report(Outcome::Skip, 0), Step::Play);
         assert_eq!(s.save.skips, 1);
@@ -2085,10 +2122,7 @@ mod tests {
             h.iter()
                 .map(|e| (e.code.clone(), e.result))
                 .collect::<Vec<_>>(),
-            vec![
-                (first.clone(), HistoryResult::Clear),
-                (second, HistoryResult::Skip)
-            ]
+            vec![(first.clone(), HistoryResult::Clear)]
         );
         // die on the third course, then quit: lives lost stay lost in the record
         let third = s.current().unwrap().id.clone();

@@ -739,7 +739,7 @@ mod tests {
         let h = me.endless_history(Difficulty::Easy).unwrap();
         assert_eq!(
             h.iter().map(|e| e.result).collect::<Vec<_>>(),
-            [HistoryResult::Clear, HistoryResult::Skip]
+            [HistoryResult::Clear]
         );
         let s = me.endless_suspend(Difficulty::Easy).unwrap();
         assert!(s.can_continue());
