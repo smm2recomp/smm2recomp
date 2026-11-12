@@ -17,7 +17,7 @@
 //!   account's cleared list too; no record time). A skip counts an attempt only when it ended a
 //!   miss; a broken course counts nothing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
 
@@ -207,11 +207,20 @@ impl Store {
             by_code,
             accounts,
             endless_runs,
+            cleared,
             ..
         } = &mut *g;
         let save = endless_runs.get_mut(who).ok_or(StoreError::NotFound)?;
         save.last = Some(d);
-        let recent = save.recent.clone();
+        // courses to avoid, the first let back in first: the ones the player cleared anywhere (Course World, Played
+        // Levels, an earlier run) that weren't dealt lately, then the ones dealt in earlier runs, oldest first (#83)
+        let mine: &[String] = cleared.get(who).map(Vec::as_slice).unwrap_or_default();
+        let mut recent: VecDeque<String> = mine
+            .iter()
+            .filter(|c| !save.recent.contains(c))
+            .cloned()
+            .collect();
+        recent.extend(save.recent.iter().cloned());
         let slot = save.slot(d, want);
         let rec = save.run_of_mut(slot, d).ok_or(StoreError::NotFound)?;
         if !rec.status.can_continue() {
@@ -247,7 +256,7 @@ impl Store {
                 Ruleset::Smm2 => pick,
                 Ruleset::Hundred => pick_hundred,
             };
-            // (courses the player was dealt in earlier runs come back only when no fresh one is left)
+            // (courses the player cleared or was dealt in earlier runs come back only when no fresh one is left)
             let p = pick_fresh(
                 rule,
                 &cands,
@@ -305,7 +314,12 @@ impl Store {
                         broken: m.owner != 0 && banned.contains(&m.owner),
                     })
                     .collect();
-                let p = pick_hundred(&castles, d, &HashSet::new(), who, 1, &mut rng);
+                // (one the player hasn't cleared, if there is one)
+                let not_mine: HashSet<&str> = mine.iter().map(String::as_str).collect();
+                let mut p = pick_hundred(&castles, d, &not_mine, who, 1, &mut rng);
+                if p.indices.is_empty() {
+                    p = pick_hundred(&castles, d, &HashSet::new(), who, 1, &mut rng);
+                }
                 if let Some(&i) = p.indices.first() {
                     taken.insert(castles[i].id.clone());
                     rec.queue[pos] = castles[i].id.clone();
@@ -749,6 +763,30 @@ mod tests {
         // without ?ruleset= the slot with a run that can go on
         let (st, b) = call(&store, "GET", "/api/endless/easy/next", me, "");
         assert_eq!((st, b["run"]["ruleset"].as_str()), (200, Some("smm2")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn endless_avoids_courses_cleared_elsewhere() {
+        let dir = tmp("cleared");
+        let store = Store::open(&dir).unwrap();
+        let (me, who) = account(&store, "Pia");
+        let (maker, _) = account(&store, "Mo");
+        let all: Vec<String> = (0..30).map(|_| course(&store, &maker, 80, 100)).collect();
+        // 25 of the 30 cleared in Course World: a new run gets the other 5 first
+        for c in &all[..25] {
+            store.clear(c, Some(&who), 0).unwrap();
+        }
+        let me = Some(me.as_str());
+        let (st, _) = call(&store, "POST", "/api/endless/easy/start", me, "");
+        assert_eq!(st, 201);
+        let (_, b) = call(&store, "GET", "/api/endless/easy/next?count=10", me, "");
+        let batch = codes(&b);
+        assert!(batch.len() >= 5, "{batch:?}");
+        assert!(
+            batch[..5].iter().all(|c| all[25..].contains(c)),
+            "{batch:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
