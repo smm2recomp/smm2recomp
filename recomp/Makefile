@@ -396,6 +396,7 @@ $(B)/rt/ui/%.o: runtime/ui/%.mm $(RT_HDRS)
 # the tag, e.g. v0.1.0 (release builds pass RECOMP_VERSION=<tag>), else git's description, else "dev"
 RECOMP_VERSION ?= $(shell git describe --tags --match 'v[0-9]*' 2>/dev/null || echo dev)
 $(B)/rt/ui/launcher.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'
+$(B)/rt/games/smm2/playrec.o: RTFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'  # (a play recording's meta.json)
 $(B)/rt/ui/menu.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'  # (the menu's About row)
 $(B)/rt/ui/launcher.o: runtime/gamebuild.h runtime/paths.h
 
