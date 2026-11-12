@@ -143,6 +143,8 @@ void smm2_player_hook(Cpu *c) {
     if (boot_holds()) return;
     extern void boot_player_updated(uint64_t player);  // (mods/boot.c: when the course has ended)
     boot_player_updated(self);
+    extern void smm2_playrec_player(uint64_t player);  // (playrec.c: RECOMP_PLAY_RECORD, RECOMP_PLAY_RANDOM)
+    smm2_playrec_player(self);
     if (state == 2) return;
     if (state == 0) {
         static int init;
