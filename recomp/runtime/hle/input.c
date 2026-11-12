@@ -719,6 +719,12 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
         return;
     }
     if (id != 0) return;  // docked: Handheld stays disconnected
+    {   // a direct boot's tick (games/smm2/mods/boot.c), once per presented frame, on the game's main thread
+        extern void boot_game_tick(Cpu *c);
+        extern uint64_t renderer_present_count(void);
+        static uint64_t boot_frame = ~0ull;
+        if (renderer_present_count() != boot_frame) { boot_frame = renderer_present_count(); boot_game_tick(c); }
+    }
     if (padscript_active()) {  // a scripted replay (RECOMP_PAD_SCRIPT): the script's buttons and sticks alone
         uint64_t b = padscript_buttons();
         int32_t lx, ly, rx, ry;
