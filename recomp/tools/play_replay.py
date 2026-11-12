@@ -257,14 +257,17 @@ def main() -> int:
     again = got[0]
     m2 = json.loads((again / "meta.json").read_text())
     n = len(rows(folder / "player.csv"))
-    want = rows(folder / "inputs.csv")
-    have = [r for r in rows(again / "inputs.csv") if int(r.split(",")[0]) < n]
+    # Frame k is the last pad state read between update k and k + 1: the recording's last frame (n - 1) is read after
+    # its last update, by none, and the replay's script has ended by then. Compared: the frames an update read.
+    read = n - 1
+    want = [r for r in rows(folder / "inputs.csv") if int(r.split(",")[0]) < read]
+    have = [r for r in rows(again / "inputs.csv") if int(r.split(",")[0]) < read]
     same_inputs = want == have
     p1, p2 = rows(folder / "player.csv"), rows(again / "player.csv")
     if starts and not a.whole:
         hs = restarts_of(again)
         same_play, lines = compare_lives(segments(p1, starts), segments(p2, hs))
-        same_inputs, where = same_inputs_by_life(inputs_per_update(folder, len(p1)), inputs_per_update(again, len(p2)),
+        same_inputs, where = same_inputs_by_life(inputs_per_update(folder, read), inputs_per_update(again, min(len(p2), read)),
                                                  starts, hs)
         print(f"inputs: {'the same in every life' if same_inputs else 'differ (' + where + ')'}")
         for ln in lines:
