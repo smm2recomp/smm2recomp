@@ -23,23 +23,15 @@ On top of the original game it adds:
 
 ## Screenshots
 
-| Title screen | Playing the title course | Make / Play |
+| Title screen | 100 Mario Challenge: difficulty select | 100 Mario Challenge: world map |
 |---|---|---|
-| ![Title screen](docs/screenshots/title.jpg) | ![Mario running the title course](docs/screenshots/title-course.jpg) | ![Make and Play menu](docs/screenshots/menu.jpg) |
+| ![Title screen](docs/screenshots/title.jpg) | ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) |
 
-**100 Mario Challenge**
-
-| Difficulty select | World map | Course-in card |
+| 100 Mario Challenge: course-in card | 100 Mario Challenge: ending | 100 Mario Challenge: credits |
 |---|---|---|
-| ![100 Mario Challenge difficulty select](docs/screenshots/100mario-select.jpg) | ![Super Expert world map with Bowser's castle](docs/screenshots/100mario-map.jpg) | ![SMM2's course-in card with 100 lives](docs/screenshots/100mario-card.jpg) |
+| ![SMM2's course-in card with 100 lives](docs/screenshots/100mario-card.jpg) | ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
 
-| Ending | Credits |
-|---|---|
-| ![Peach thanks Mario](docs/screenshots/100mario-ending.jpg) | ![Credits: each cleared course as an SMM2 course card with its course ID and maker](docs/screenshots/100mario-credits.jpg) |
-
-**SMM1 features as mods**
-
-| Lanky Mario | Mystery Mushroom costume | SMW goal wipe |
+| SMM1 mod: Lanky Mario | SMM1 mod: Mystery Mushroom costume | SMM1 mod: SMW goal wipe |
 |---|---|---|
 | ![Lanky Mario, tall and stretched, jumping in an SMB1-style course](docs/screenshots/lanky-mario.jpg) | ![Mario in SMM1's Sonic costume running through an SMB1-style sky course](docs/screenshots/costume.jpg) | ![SMW's black circle closing on Mario after the goal tape](docs/screenshots/smw-goal-wipe.jpg) |
 
