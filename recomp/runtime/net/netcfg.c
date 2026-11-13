@@ -62,6 +62,7 @@ static const char *const backend_keys[NET_BACKEND_COUNT] = {"ours", "local-nex",
 static pthread_mutex_t ocw_lock = PTHREAD_MUTEX_INITIALIZER;
 static char ocw_name[128];                 // lower case, as net_resolve compares
 static char ocw_fixed[64];                 // the config's "ip": the name points here, the resolver is never asked
+static uint16_t ocw_port;                  // ... and its port, when that "ip" named one (0: the game's own)
 static uint32_t ocw_ips[OCW_MAX_IPS];      // the addresses the name has answered with lately: a session already
 static int ocw_nips, ocw_oldest;           // connected to one must keep sending to it, so they stay allowed for a
                                            // while. A ring: full, the oldest goes, so a new one always gets in
@@ -234,6 +235,7 @@ void net_config_reload(void) {
     memset(pin, 0, sizeof pin);
     pthread_mutex_lock(&ocw_lock);
     ocw_name[0] = ocw_fixed[0] = 0;
+    ocw_port = 0;
     ocw_nips = ocw_oldest = 0, ocw_cur = 0, ocw_when = 0;
     pthread_mutex_unlock(&ocw_lock);
     pthread_mutex_lock(&rev_lock);
@@ -318,9 +320,13 @@ void net_log_redact(const char *in, char *out, size_t cap) {
     hide_secrets(out);
 }
 uint32_t net_test_server_ip(void) { init(); return test_ip; }
+static bool ocw_owns(uint32_t ip);
 uint16_t net_dest_port(uint32_t ip, uint16_t port) {
     init();
-    return backend_eff == NET_BACKEND_LOCAL_NEX && ip == test_ip && port == 443 ? test_port : port;
+    if (backend_eff == NET_BACKEND_LOCAL_NEX && ip == test_ip && port == 443) return test_port;
+    // ocw with a port in the config's "ip": the game's connection to the host on 443 goes to that port instead
+    if (backend_eff == NET_BACKEND_OCW && ocw_port && port == 443 && ocw_owns(ip)) return ocw_port;
+    return port;
 }
 NetTrust net_tls_trust(void) { init(); return trust; }
 const char *net_tls_ca_path(void) { init(); return ca_path; }
@@ -402,12 +408,23 @@ void net_ocw_set_target(const char *host, const char *ip) {
     ocw_name[n] = 0;
     while (n && ocw_name[n - 1] == '.') ocw_name[--n] = 0;
     snprintf(ocw_fixed, sizeof ocw_fixed, "%s", ip ? ip : "");
+    // "ip" may name a port too (10.0.0.5:6000): a self-hosted OCW need not have 443 to itself. The game still
+    // connects on 443, as it does to OCW; net_dest_port sends that connection here instead.
+    ocw_port = 0;
+    char *colon = strchr(ocw_fixed, ':');
+    if (colon) {
+        *colon = 0;
+        long v = strtol(colon + 1, NULL, 10);
+        if (v > 0 && v < 65536) ocw_port = (uint16_t)v;
+        else LOG("[net] ocw ip=\"%s\": \"%s\" is not a port\n", ip, colon + 1);
+    }
     ocw_nips = 0;
     ocw_oldest = 0;
     ocw_cur = 0;
     ocw_when = 0;
     pthread_mutex_unlock(&ocw_lock);
-    LOG("[net] ocw host \"%s\"%s%s\n", ocw_name, ocw_fixed[0] ? " at " : "", ocw_fixed);
+    LOG("[net] ocw host \"%s\"%s%s%s%u\n", ocw_name, ocw_fixed[0] ? " at " : "", ocw_fixed,
+        ocw_port ? " port " : "", ocw_port);
 }
 
 bool net_ocw_host(char *out, size_t cap) {
