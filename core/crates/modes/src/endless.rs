@@ -56,10 +56,10 @@ pub const SKIP_HINT_MAX_SKIPS: u32 = 2;
 pub const RATING_MIN_FRAMES: u32 = 1800;
 /// The global rank is shown on the map when it is at most this (§4.4) [obs].
 pub const RANK_SHOWN: u32 = 100_000;
-/// Starting lives of a New Game, every difficulty. The binary has no client default (the server
-/// sends it, §2.1); 5 is community knowledge [ext/inf], kept per difficulty in
-/// [`Difficulty::start_lives`] so it can follow a verified value.
-pub const START_LIVES: u32 = 5;
+/// Starting lives of a New Game per difficulty (Easy, Normal, Expert, Super Expert). The binary has
+/// no client default (the server sends it, §2.1); 5 / 5 / 15 / 30 is what the Super Mario Wiki and
+/// reviews of the game list [ext] (#83: 5 on every difficulty before).
+pub const START_LIVES: [u32; 4] = [5, 5, 15, 30];
 /// A course's clear rate rates it only after this many attempts (§3.4) [inf, our proposal].
 pub const MIN_RATED_ATTEMPTS: u64 = 20;
 /// Band thresholds on the clear rate, in basis points (1/100 %): Easy ≥ 34 %, Normal 12–34 %,
@@ -159,9 +159,9 @@ impl Difficulty {
         Self::ALL.into_iter().find(|d| d.name() == s)
     }
 
-    /// Lives of a New Game ([`START_LIVES`], [ext/inf]).
+    /// Lives of a New Game ([`START_LIVES`], [ext]).
     pub fn start_lives(self) -> u32 {
-        START_LIVES
+        START_LIVES[self.index()]
     }
 
     /// The band of a clear rate in basis points.
@@ -1586,8 +1586,8 @@ mod tests {
         for d in Difficulty::ALL {
             assert_eq!(Difficulty::from_name(d.name()), Some(d));
             assert_eq!(Difficulty::from_index(d.index()), Some(d));
-            assert_eq!(d.start_lives(), 5);
         }
+        assert_eq!(Difficulty::ALL.map(Difficulty::start_lives), [5, 5, 15, 30]);
         assert_eq!(
             Difficulty::ALL.map(Difficulty::name),
             ["easy", "normal", "expert", "super_expert"]
@@ -1949,7 +1949,11 @@ mod tests {
         );
         assert!(s.run(Difficulty::Expert).is_none());
         let r = s.new_game(Difficulty::Expert, 70);
-        assert_eq!((r.status.best_before, r.status.lives), (1, 5));
+        assert_eq!(
+            (r.status.best_before, r.status.lives),
+            (1, 15),
+            "Expert starts with 15"
+        );
         assert_eq!(Report::from_json(&clear_report().to_json()), clear_report());
     }
 

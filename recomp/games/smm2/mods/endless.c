@@ -416,6 +416,12 @@ static void read_slot(Json *run, struct slot *s) {
 // The run state +4 is 1 for a run that can go on: the menu offers Continue only for state 1 or 2 with lives (+0x30)
 // and a history [obs 0x7101a26850]; 0 resets its map to an empty run. +0x11: the start lives New Game reads (the
 // game has no default).
+// A New Game's lives: 100 Mario's 100, else SMM2's per difficulty (core endless.rs START_LIVES, #83)
+static uint8_t start_lives(uint32_t d) {
+    static const uint8_t smm2[4] = {5, 5, 15, 30};
+    return hundred_rules() ? 100 : smm2[d & 3];
+}
+
 static void write_record(uint64_t r, uint32_t d) {
     pthread_mutex_lock(&state_lock);
     struct slot s = slots[hundred_rules()][d];
@@ -429,7 +435,7 @@ static void write_record(uint64_t r, uint32_t d) {
     s8(r + 0x08, cont ? (uint8_t)(s.coins % 100) : 0);
     s32(r + 0x0c, cont ? s.score : 0);
     s8(r + 0x10, cont ? lv : 0);
-    s8(r + 0x11, hundred_rules() ? 100 : 5);
+    s8(r + 0x11, start_lives(d));
     s64(r + 0x18, 0);
     s64(r + 0x20, 0);
     s8(r + 0x28, cont ? 1 : 0);  // (the play part: a run that can go on has lives; none shows none)
@@ -564,7 +570,7 @@ void endless_prepare_run(int d, bool resume) {
     pthread_mutex_lock(&state_lock);
     if (!resume) {
         memset(&runs[d], 0, sizeof runs[d]);
-        runs[d].active = true, runs[d].lives = hundred_rules() ? 100 : 5, runs[d].goal = totals[d];
+        runs[d].active = true, runs[d].lives = start_lives((uint32_t)d), runs[d].goal = totals[d];
     }
     runs[d].current = 0;
     pthread_mutex_unlock(&state_lock);
