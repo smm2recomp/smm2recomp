@@ -202,12 +202,28 @@ static void create_device(void) {
             (host_heap < 0 || mem_props.memoryHeaps[h].size > mem_props.memoryHeaps[host_heap].size))
             host_heap = (int)h;
     }
-    bool low_vram = host_heap >= 0 && (mem_props.memoryHeaps[host_heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) &&
+    // An integrated GPU counts its shared memory the same way when that heap isn't flagged device-local (AMD's Windows
+    // driver on a Vega 8 with 8 GB of RAM: a 3 GB heap; the import then failed vkQueueSubmit2 with
+    // VK_ERROR_OUT_OF_DEVICE_MEMORY, #93).
+    bool integrated = g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+    bool low_vram = host_heap >= 0 &&
+                    ((mem_props.memoryHeaps[host_heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) || integrated) &&
                     mem_props.memoryHeaps[host_heap].size < HEAP_MAX + (3ull << 30);
     if (low_vram && g_vk.host_import)
         LOG("[vk] shared GPU memory is %llu MB: the guest heap is not imported (it would leave too little for textures)\n",
             (unsigned long long)(mem_props.memoryHeaps[host_heap].size >> 20));
-    bool no_gmem = !g_vk.host_import || low_vram || getenv("LARECOMP_VK_NO_GMEM");
+    // AMD on Linux (RADV, AMDVLK): the kernel driver checks every page of imported host memory again on each submit, so
+    // with the 3.2 GB import every vkQueueSubmit took ~20 ms and the game ran at 10-20 fps on an RX 580 and an RX 9070;
+    // without it, 60 (#87). The Steam Deck uses the same driver. LARECOMP_VK_NO_GMEM=0 keeps the import there.
+    bool amd_linux = false;
+#ifdef __linux__
+    amd_linux = g_vk.driver_id == VK_DRIVER_ID_MESA_RADV || g_vk.driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE ||
+                g_vk.driver_id == VK_DRIVER_ID_AMD_PROPRIETARY;
+#endif
+    const char *ng = getenv("LARECOMP_VK_NO_GMEM");
+    if (amd_linux && g_vk.host_import && !low_vram && !ng)
+        LOG("[vk] AMD's Linux driver: the guest heap is not imported (it slows every submit, #87)\n");
+    bool no_gmem = !g_vk.host_import || (ng ? atoi(ng) != 0 : low_vram || amd_linux);
     g_vk.bda = have12.bufferDeviceAddress && have.features.shaderInt64 && !no_gmem && !getenv("LARECOMP_VK_NO_BDA");
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
