@@ -86,9 +86,18 @@ void output_scale(double dw, double dh, bool reshape_allowed, double now, double
     // 1.43 they don't, the rounded allocations drift apart by a fraction of a pixel, and 3D World's characters, drawn
     // in their own layer and laid over the course by depth, showed the course through them in spots (the iPad's
     // 1.43 x 1.91, owner 2026-10-21; seen on the Mac at 1.075, 1.43 and 1.45; clean at 1.2, 1.4, 1.6, 1.8, 2)
+    // Match display on a 16:9 screen goes to the nearest multiple instead: rounding down rendered 1440p at 1.2
+    // (2304x1296) and stretched it 1.11x, blurrier than 1x (#92); 1.4 (2688x1512) shrinks a little and stays sharp.
+    // (A true 1.333 can't keep the 1600x900 targets whole.) Reshaped screens (the iPad, ultrawides) keep rounding
+    // down: there it is a performance choice.
     if (forced <= 0) {
-        sx = fmax(0.2, floor(sx * 5.0 + 1e-6) / 5.0);
-        sy = fmax(0.2, floor(sy * 5.0 + 1e-6) / 5.0);
+        bool nearest = mode == RES_MATCH && !reshape;
+        double rx = (nearest ? round(sx * 5.0) : floor(sx * 5.0 + 1e-6)) / 5.0;
+        double ry = (nearest ? round(sy * 5.0) : floor(sy * 5.0 + 1e-6)) / 5.0;
+        if (1920.0 * rx > MAX_TEX || 1080.0 * ry > MAX_TEX)  // (rounded up past the texture limit: down after all)
+            rx = floor(sx * 5.0 + 1e-6) / 5.0, ry = floor(sy * 5.0 + 1e-6) / 5.0;
+        sx = fmax(0.2, rx);
+        sy = fmax(0.2, ry);
     }
     o->sx = sx; o->sy = sy; o->shape = shape;
     // where the image goes in the window: fills it when reshaped, else a fitted 16:9 box
