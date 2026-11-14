@@ -62,6 +62,13 @@ WEAK void digs_game_tick(Cpu *c, uint64_t frame) { (void)c, (void)frame; }
 WEAK void qol_tick(void) {}
 WEAK void pets_game_tick(Cpu *c) { (void)c; }
 WEAK void warp_frame(uint64_t frame) { (void)frame; }
+// a direct boot into a course (games/smm2/mods/boot.c): its tick, once per presented frame from the pad read on the
+// game's main thread (runtime/hle/input.c, before a pad script's state), and whether it is still on its way, which the
+// pad script's clock, the trace and the probes wait for
+WEAK void boot_game_tick(Cpu *c) { (void)c; }
+WEAK bool boot_holds(void) { return false; }
+WEAK void boot_player_updated(uint64_t player) { (void)player; }
+WEAK bool boot_skip_intro(void) { return false; }   // (games/smm2/patches.py's title phase: the cutscene skipped)
 WEAK void save_editor_frame(uint64_t frame) { (void)frame; }
 
 // ---- input (runtime/hle/input.c)
