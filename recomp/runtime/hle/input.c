@@ -32,8 +32,9 @@ static SDL_Gamepad *pad;
 static _Atomic int64_t sampling;
 
 // Players 2-4 (local multiplayer: Play Together): each further controller is the next player, Npad No. 2..4 (ids
-// 1..3), through the same controller bindings. Player 1 keeps the keyboard, the on-screen controller and the first
-// controller. LARECOMP_INPUT2 (same form as LARECOMP_INPUT) is a scripted player 2 for tests.
+// 1..3), through that player's controller bindings (player 1's until it has its own: runtime/hle/bindings.c
+// bind_pad_table). Player 1 keeps the keyboard, the on-screen controller and the first controller. LARECOMP_INPUT2
+// (same form as LARECOMP_INPUT) is a scripted player 2 for tests.
 #define EXTRA_PADS 3
 static SDL_Gamepad *extra_pad[EXTRA_PADS];
 static _Atomic uint64_t extra_buttons[EXTRA_PADS];
@@ -47,6 +48,7 @@ static bool script2_on(void) {
 }
 static bool extra_connected(int i) { return extra_pad[i] || (i == 0 && script2_on()); }
 static void style_changed(void);
+static void note_players(void);
 static bool real_gamepad(SDL_JoystickID id);
 
 // Host keys / buttons held by a test script (LARECOMP_HOST_INPUT, input_frame): they go through the bindings
@@ -69,7 +71,8 @@ static void recompute_keyboard(void) {
     key_ry = (held_key(g_bind_key[BIND_RS_UP]) - held_key(g_bind_key[BIND_RS_DOWN])) * 32767;
 }
 
-// Controller buttons (and the triggers as buttons) -> Switch buttons through g_bind_pad; the sticks stay the sticks.
+// Controller buttons (and the triggers as buttons) -> Switch buttons through the player's table (bind_pad_table); the
+// sticks stay the sticks.
 static void recompute_pad(void) {
     uint32_t host = test_pad;
     if (pad && !host_test) {
@@ -78,9 +81,10 @@ static void recompute_pad(void) {
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
         if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) host |= 1u << PADB_RTRIGGER;
     }
+    const int16_t *t = bind_pad_table(1);
     uint64_t b = 0;
     for (int i = 0; i < BIND_PAD_COUNT; i++)
-        if (g_bind_pad[i] >= 0 && g_bind_pad[i] < PADB_HOST_COUNT && (host >> g_bind_pad[i] & 1)) b |= 1ull << i;
+        if (t[i] >= 0 && t[i] < PADB_HOST_COUNT && (host >> t[i] & 1)) b |= 1ull << i;
     pad_buttons = b;
     if (!pad || host_test) { pad_lx = test_lx, pad_ly = test_ly, pad_rx = pad_ry = 0; return; }
     pad_lx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX);
@@ -98,9 +102,10 @@ static void recompute_extra(int i) {
         if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
         if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) host |= 1u << PADB_RTRIGGER;
     }
+    const int16_t *t = bind_pad_table(i + 2);
     uint64_t b = 0;
     for (int k = 0; k < BIND_PAD_COUNT; k++)
-        if (g_bind_pad[k] >= 0 && g_bind_pad[k] < PADB_HOST_COUNT && (host >> g_bind_pad[k] & 1)) b |= 1ull << k;
+        if (t[k] >= 0 && t[k] < PADB_HOST_COUNT && (host >> t[k] & 1)) b |= 1ull << k;
     extra_buttons[i] = b;
     extra_lx[i] = g ? SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX) : 0;
     extra_ly[i] = g ? -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY) : 0;
@@ -118,6 +123,7 @@ static void open_extra(SDL_JoystickID id) {
             extra_pad[i] = SDL_OpenGamepad(id);
             if (!extra_pad[i]) return;
             LOG("[input] player %d: %s\n", i + 2, SDL_GetGamepadName(extra_pad[i]));
+            note_players();
             recompute_extra(i);
             style_changed();
             return;
@@ -199,16 +205,20 @@ bool input_user_blocked(const SDL_Event *e) {
 // LARECOMP_PAD_TYPE=xbox|playstation|nintendo pretends one is attached (tests).
 static _Atomic int pad_family;
 static _Atomic bool pad_connected;  // a gamepad is open (the on-screen controller hides)
-static void note_family(void) {
-    pad_connected = pad != NULL;
-    int f = 0;
-    if (pad) switch (SDL_GetGamepadType(pad)) {
-        case SDL_GAMEPAD_TYPE_XBOX360: case SDL_GAMEPAD_TYPE_XBOXONE: f = 1; break;
-        case SDL_GAMEPAD_TYPE_PS3: case SDL_GAMEPAD_TYPE_PS4: case SDL_GAMEPAD_TYPE_PS5: f = 2; break;
+static int family_of(SDL_Gamepad *g) {
+    if (g) switch (SDL_GetGamepadType(g)) {
+        case SDL_GAMEPAD_TYPE_XBOX360: case SDL_GAMEPAD_TYPE_XBOXONE: return 1;
+        case SDL_GAMEPAD_TYPE_PS3: case SDL_GAMEPAD_TYPE_PS4: case SDL_GAMEPAD_TYPE_PS5: return 2;
         default: break;
     }
+    return 0;
+}
+static void note_family(void) {
+    pad_connected = pad != NULL;
+    int f = family_of(pad);
     if (f != pad_family) LOG("[input] button prompts: %s controller\n", f == 1 ? "Xbox" : f == 2 ? "PlayStation" : "Nintendo / other");
     pad_family = f;
+    note_players();
 }
 int input_pad_family(void) {
     static int env = -2;
@@ -220,6 +230,35 @@ int input_pad_family(void) {
 }
 
 bool input_gamepad_connected(void) { return pad_connected; }
+
+// Which controller is each player's, for the Controls tab and a binding capture (runtime/ui/controls_ui.mm,
+// runtime/hle/bindings.c): player 1's is `pad` (none with "Controllers start at player 2"), player N's is
+// extra_pad[N - 2]. Those run on other threads than the one that opens and closes the controllers, so they get the
+// SDL joystick id and the family noted here each time one comes or goes, never the SDL_Gamepad itself.
+_Static_assert(BIND_PLAYERS == EXTRA_PADS + 1, "player 1 and the extra controllers' players");
+static _Atomic uint32_t player_pad_id[BIND_PLAYERS];
+static _Atomic int player_family[BIND_PLAYERS];
+static void note_players(void) {
+    for (int p = 0; p < BIND_PLAYERS; p++) {
+        SDL_Gamepad *g = p ? extra_pad[p - 1] : pad;
+        player_family[p] = family_of(g);
+        player_pad_id[p] = g ? SDL_GetGamepadID(g) : 0;
+    }
+}
+uint32_t input_player_pad(int player) { return player >= 1 && player <= BIND_PLAYERS ? player_pad_id[player - 1] : 0; }
+const char *input_player_pad_name(int player) {
+    uint32_t id = input_player_pad(player);
+    return id ? SDL_GetGamepadNameForID(id) : NULL;
+}
+// (player 1, and a player without a controller: as the editor always had it, LARECOMP_PAD_TYPE included)
+int input_player_family(int player) {
+    return player > 1 && input_player_pad(player) ? player_family[player - 1] : bind_label_family();
+}
+int input_pad_player(uint32_t id) {
+    for (int p = 0; id && p < BIND_PLAYERS; p++)
+        if (player_pad_id[p] == id) return p + 1;
+    return -1;
+}
 
 // (Android: the emulator's own keyboard, "qwerty2", has gamepad keys and SDL lists it as a gamepad; it would hide
 // the on-screen controller)
@@ -322,6 +361,7 @@ void input_handle_event(const SDL_Event *e) {
                 LOG("[input] player %d: controller removed\n", i + 2);
                 SDL_CloseGamepad(extra_pad[i]);
                 extra_pad[i] = NULL;
+                note_players();
                 recompute_extra(i);
                 style_changed();
             }
@@ -357,7 +397,8 @@ static _Atomic int32_t script_lx, script_ly, script_rx, script_ry;
 // "frame:shot:<name>" saves the window (game + menus) to build/<name>.png.
 // LARECOMP_BIND_TEST="frame:pad|key:<input>:<host>,..." starts a rebind capture of <input> (bind_* name: a, zl,
 //   ls_up...) at that frame (the Controls tab shows it waiting) and presses <host> 90 frames later ("esc" cancels,
-//   "wait" lets it time out); "frame:reset:pad|key" resets to the defaults.
+//   "wait" lets it time out); "frame:reset:pad|key" resets to the defaults. pad2 / pad3 / pad4 in place of pad:
+//   that player's controller bindings (pad is player 1's).
 static void push_key(SDL_Scancode sc, SDL_Keymod mod, bool down) {
     SDL_Event e;
     memset(&e, 0, sizeof e);
@@ -532,12 +573,18 @@ static void host_test_frame(uint64_t frame) {
         for (char *tok = strtok_r(buf, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
             unsigned long start = 0;
             char dev[8] = "", in[16] = "", host[40] = "";
-            if (sscanf(tok, "%lu:%7[a-z]:%15[a-z_]:%39[^:]", &start, dev, in, host) < 3) continue;
-            if (!strcmp(dev, "reset")) { if (frame == start) bind_reset(!strcmp(in, "key") ? BIND_DEV_KEY : BIND_DEV_PAD); continue; }
+            if (sscanf(tok, "%lu:%7[a-z0-9]:%15[a-z_0-9]:%39[^:]", &start, dev, in, host) < 3) continue;
+            const char *pn = !strcmp(dev, "reset") ? in : dev;  // "pad2".."pad4": that player (else player 1)
+            int player = !strncmp(pn, "pad", 3) && pn[3] >= '2' && pn[3] <= '0' + BIND_PLAYERS && !pn[4]
+                             ? pn[3] - '0' : 1;
+            if (!strcmp(dev, "reset")) {
+                if (frame == start) bind_reset(!strcmp(in, "key") ? BIND_DEV_KEY : BIND_DEV_PAD, player);
+                continue;
+            }
             int d = !strcmp(dev, "key") ? BIND_DEV_KEY : BIND_DEV_PAD;
             if (frame == start) {
                 LOG("[input] test: capture %s %s\n", dev, in);
-                bind_capture_begin(d, bind_slot_from_name(in));
+                bind_capture_begin(d, player, bind_slot_from_name(in));
             }
             if (frame == start + 90 && strcmp(host, "wait")) {
                 SDL_Event e;

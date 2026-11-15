@@ -126,9 +126,11 @@ static ImGuiKey key_from_scancode(SDL_Scancode sc) {
 
 // Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back. Bindings don't reach the menus
 // (input_bind.h: none can lock the player out), with one exception: A and B swapped onto the bottom and right buttons
-// (bind_pad_a = south, bind_pad_b = east, the Xbox habit) swaps them here too, as the game does (issue #40).
+// (bind_pad_a = south, bind_pad_b = east, the Xbox habit) swaps them here too, as the game does (issue #40). The
+// bindings read are the first controller's player's: player 1's, or player 2's with "Controllers start at player 2".
 static bool menu_ab_swapped(void) {
-    return g_bind_pad[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && g_bind_pad[BIND_B] == SDL_GAMEPAD_BUTTON_EAST;
+    const int16_t *t = bind_pad_table(g_settings.pads_from_p2 ? 2 : 1);
+    return t[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && t[BIND_B] == SDL_GAMEPAD_BUTTON_EAST;
 }
 static ImGuiKey key_from_pad(Uint8 b) {
     bool sw = menu_ab_swapped();
