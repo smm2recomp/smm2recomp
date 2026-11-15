@@ -39,9 +39,11 @@ static void cell(int dev, int player, int slot, int fam, int cap_dev, int cap_pl
     if (waiting && !ImGui::IsItemVisible()) ImGui::SetScrollHereY(0.5f);  // (a capture started by a test hook)
 }
 
+static int player = 1;  // whose bindings are shown
+extern "C" int controls_player(void) { return player; }  // (menu.mm: the stick preview shows that player's controller)
+
 extern "C" void controls_bindings_draw(float scale) {
     (void)scale;
-    static int player = 1;  // whose bindings are shown
     int cd, cp, cs, ms;
     bind_capture_active(&cd, &cp, &cs, &ms);
     if (cd == BIND_DEV_PAD && cp != player) player = cp;  // (a capture started by a test hook)

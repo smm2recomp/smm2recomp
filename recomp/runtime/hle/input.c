@@ -17,6 +17,7 @@
 #include "../settings.h"
 #include "../input_bind.h"
 #include "../padscript.h"
+#include "stick_deadzone.h"
 
 enum {
     BTN_A = 0, BTN_B, BTN_X, BTN_Y, BTN_LSTICK, BTN_RSTICK, BTN_L, BTN_R, BTN_ZL, BTN_ZR, BTN_PLUS, BTN_MINUS,
@@ -258,6 +259,23 @@ int input_pad_player(uint32_t id) {
     for (int p = 0; id && p < BIND_PLAYERS; p++)
         if (player_pad_id[p] == id) return p + 1;
     return -1;
+}
+
+// The Controls tab's stick preview (runtime/ui/menu.mm, #98): the left stick (right: the right one) of that player's
+// controller as it is now, before the dead zone, y up as in recompute_pad; false when the player has no controller.
+// Read from the controller itself: while the menu is up its events don't reach input_handle_event, so pad_lx and the
+// rest stand still. The menu is drawn on the render thread and the main thread may close the controller meanwhile: it
+// is looked up by its id (input_player_pad) under SDL's lock.
+bool input_preview_stick(int player, int right, int32_t *x, int32_t *y) {
+    SDL_JoystickID id = input_player_pad(player);
+    SDL_LockJoysticks();
+    SDL_Gamepad *g = id ? SDL_GetGamepadFromID(id) : NULL;
+    if (g) {
+        *x = SDL_GetGamepadAxis(g, right ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX);
+        *y = -SDL_GetGamepadAxis(g, right ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY);
+    }
+    SDL_UnlockJoysticks();
+    return g != NULL;
 }
 
 // (Android: the emulator's own keyboard, "qwerty2", has gamepad keys and SDL lists it as a gamepad; it would hide
@@ -749,9 +767,13 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
         if (!extra_connected(i) || padscript_active()) return;
         bool menu = menu_input_captured();
         uint64_t b = menu ? 0 : extra_buttons[i] | (i == 0 ? script2_buttons : 0);
-        int32_t lx = menu ? 0 : clamp_axis(extra_lx[i] + (i == 0 ? script2_lx : 0));
-        int32_t ly = menu ? 0 : clamp_axis(extra_ly[i] + (i == 0 ? script2_ly : 0));
-        int32_t rx = menu ? 0 : extra_rx[i], ry = menu ? 0 : extra_ry[i];
+        // the controller's sticks past their dead zones (Controls > Sticks, #98; off: as they are), before the script's
+        int32_t plx = extra_lx[i], ply = extra_ly[i], prx = extra_rx[i], pry = extra_ry[i];
+        stick_deadzone(&plx, &ply, g_settings.stick_deadzone_l);
+        stick_deadzone(&prx, &pry, g_settings.stick_deadzone_r);
+        int32_t lx = menu ? 0 : clamp_axis(plx + (i == 0 ? script2_lx : 0));
+        int32_t ly = menu ? 0 : clamp_axis(ply + (i == 0 ? script2_ly : 0));
+        int32_t rx = menu ? 0 : prx, ry = menu ? 0 : pry;
         if (lx < -16000) b |= 1ull << 16;
         if (ly > 16000) b |= 1ull << 17;
         if (lx > 16000) b |= 1ull << 18;
@@ -817,9 +839,15 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
         if (g_inject_plus > 0) { until = renderer_present_count() + 10; g_inject_plus = 0; }
         if (renderer_present_count() < until) b |= 1ull << BTN_PLUS;
     }
-    int32_t lx = clamp_axis((menu ? 0 : key_lx + pad_lx + touch_lx) + script_lx);
-    int32_t ly = clamp_axis((menu ? 0 : key_ly + pad_ly + touch_ly) + script_ly);
-    int32_t rx = clamp_axis((menu ? 0 : key_rx + pad_rx) + script_rx), ry = clamp_axis((menu ? 0 : key_ry + pad_ry) + script_ry);
+    // the controller's sticks past their dead zones (Controls > Sticks, #98; off: as they are): the keyboard, the
+    // on-screen stick and scripts have none
+    int32_t plx = pad_lx, ply = pad_ly, prx = pad_rx, pry = pad_ry;
+    stick_deadzone(&plx, &ply, g_settings.stick_deadzone_l);
+    stick_deadzone(&prx, &pry, g_settings.stick_deadzone_r);
+    int32_t lx = clamp_axis((menu ? 0 : key_lx + plx + touch_lx) + script_lx);
+    int32_t ly = clamp_axis((menu ? 0 : key_ly + ply + touch_ly) + script_ly);
+    int32_t rx = clamp_axis((menu ? 0 : key_rx + prx) + script_rx);
+    int32_t ry = clamp_axis((menu ? 0 : key_ry + pry) + script_ry);
     extern bool mirror_input(void);  // mirror mode, the world on screen (runtime/hle/mirror.c): left and right swap
     bool mirrored = !menu && mirror_input();
     if (mirrored) {
