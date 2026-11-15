@@ -37,6 +37,7 @@ extern "C" {
 void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
 int controls_player(void);  // (the player whose bindings it shows, 1-4)
+void controls_order_draw(ImFont *big);  // (its Controller order page; big: the font of its boxes' numbers)
 #include "../input_bind.h"
 extern "C" {
 #include "../nvn/shader_ahead.h"
@@ -131,10 +132,13 @@ static ImGuiKey key_from_scancode(SDL_Scancode sc) {
 // Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back. Bindings don't reach the menus
 // (input_bind.h: none can lock the player out), with one exception: A and B swapped onto the bottom and right buttons
 // (bind_pad_a = south, bind_pad_b = east, the Xbox habit) swaps them here too, as the game does (issue #40). The
-// bindings read are the first controller's player's: player 1's, or player 2's with "Controllers start at player 2".
-static bool menu_ab_swapped(void) {
-    const int16_t *t = bind_pad_table(g_settings.pads_from_p2 ? 2 : 1);
-    return t[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && t[BIND_B] == SDL_GAMEPAD_BUTTON_EAST;
+// bindings read are the first controller's player's: player 1's, or player 2's with "Controllers start at player 2"
+// (bind_first_pad_player, as the button prompts). "A and B swapped in menus" (#84) then trades them again, as in the
+// game's menus, so both confirm with the same button (bind_menu_ab_swapped).
+extern "C" bool menu_ab_swapped(void) {  // (runtime/hle/input.c too: the Controller order page's confirm and back)
+    const int16_t *t = bind_pad_table(bind_first_pad_player());
+    return bind_menu_ab_swapped(t[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && t[BIND_B] == SDL_GAMEPAD_BUTTON_EAST,
+                                g_settings.menu_ab_swap, g_settings.pads_from_p2);
 }
 static ImGuiKey key_from_pad(Uint8 b) {
     bool sw = menu_ab_swapped();
@@ -188,6 +192,8 @@ extern "C" bool menu_input_captured(void) { return capturing(); }
 bool menu_handle_event(const SDL_Event *e) {
     static bool back_down, start_down;
     if (g_open.load() && bind_capture_event(e)) return true;  // Controls tab waiting for a new binding: it takes the press
+    // its Controller order page: the controllers are its own (but Guide and Back + Start, the menu's open / close)
+    if (g_open.load() && input_pad_order_event(e)) return true;
     if (e->type == SDL_EVENT_KEY_DOWN) g_last_pad = false;
     if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) g_last_pad = true;
     if (g_kbd.load() == 1 && e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat) {  // Enter confirms, Esc cancels
@@ -306,6 +312,8 @@ bool menu_handle_event(const SDL_Event *e) {
 void menu_apply_window_requests(void *win) {
     SDL_Window *w = (SDL_Window *)win;
     g_pixel_density = SDL_GetWindowPixelDensity(w);
+    // (Controls > Controller order: the controllers change players on this thread)
+    input_pad_order_tick(g_open.load());
     static bool text_input;
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
     // (iOS, Android: text input brings up the system keyboard - only for a text field or the name entry, not the whole
@@ -1012,6 +1020,11 @@ static void stick_preview(const char *label, int right, int pct) {
 }
 
 static void tab_about(void) {
+    if (input_pad_order_active()) {  // Controls > Controller order: its page, in place of the tab's rows
+        header("Controller order");
+        controls_order_draw(g_font_big);
+        return;
+    }
     header("Button prompts");
     {
         static const char *const fam[] = {"Nintendo", "Xbox", "PlayStation"};
@@ -1043,9 +1056,10 @@ static void tab_about(void) {
         input_pads_reassign();
     }
     if (opt_toggle("A and B swapped in menus", &g_settings.menu_ab_swap, false,
-                   "In the game's menus, a controller's A and B trade places, so the bottom button confirms and the "
-                   "right one goes back (the Xbox habit). While playing a course they stay as set below. The Course "
-                   "Maker counts as a menu while editing.")) {
+                   "In the game's menus and this one, a controller's A and B trade places from where they are bound: "
+                   "with the default bindings the bottom button confirms and the right one goes back (the Xbox "
+                   "habit). While playing a course they stay as set below. The Course Maker counts as a menu while "
+                   "editing.")) {
         settings_save();
     }
     controls_bindings_draw(ImGui::GetFontSize() / 34);
@@ -1257,6 +1271,8 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
             ImGui::EndDisabled();
             if (open) {
                 g_tab = t.id;
+                // (Controls > Controller order: left with its tab)
+                if (t.id != 8 && input_pad_order_active()) input_pad_order_request(PAD_ORDER_CANCEL);
                 ImGui::Spacing();
                 ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_None,  // (the rest of the window: no hint line)
                                   ImGuiWindowFlags_NavFlattened);

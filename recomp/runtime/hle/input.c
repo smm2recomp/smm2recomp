@@ -18,6 +18,7 @@
 #include "../input_bind.h"
 #include "../padscript.h"
 #include "stick_deadzone.h"
+#include "pad_order.h"
 
 enum {
     BTN_A = 0, BTN_B, BTN_X, BTN_Y, BTN_LSTICK, BTN_RSTICK, BTN_L, BTN_R, BTN_ZL, BTN_ZR, BTN_PLUS, BTN_MINUS,
@@ -273,6 +274,173 @@ bool input_preview_stick(int player, int right, int32_t *x, int32_t *y) {
     if (g) {
         *x = SDL_GetGamepadAxis(g, right ? SDL_GAMEPAD_AXIS_RIGHTX : SDL_GAMEPAD_AXIS_LEFTX);
         *y = -SDL_GetGamepadAxis(g, right ? SDL_GAMEPAD_AXIS_RIGHTY : SDL_GAMEPAD_AXIS_LEFTY);
+    }
+    SDL_UnlockJoysticks();
+    return g != NULL;
+}
+
+// Controls > Controller order (runtime/ui/controls_ui.mm), as the Switch's "Change Grip/Order" screen. Its page keeps
+// a draft (pad_order.h): a controller that holds L + R joins in the lowest empty box, one that lets go and holds them
+// again for two seconds leaves its box. Nothing changes until the draft is confirmed: by the menu's confirm button
+// (A) on the controller in the lowest box, or Enter, and only once there is a player 1. Then the controllers that
+// joined become their boxes' players and the others follow in the order they had; a controller takes its player's
+// bindings, as when it is plugged in (bind_pad_table: they are the player's, not the controller's). The menu's back
+// button (B) on that controller, or on any while nobody has joined, or Esc, leaves everything as it was. Nothing of
+// the order is kept: the next start takes the controllers as SDL lists them again.
+// The page is drawn on the render thread, which only asks (order_request) and reads the draft's copy (order_box,
+// order_hold). The draft is kept and the controllers change players here, on the thread that opens and closes them:
+// the main thread's input_pad_order_event (runtime/ui/menu.mm menu_handle_event) and input_pad_order_tick
+// (menu_apply_window_requests).
+_Static_assert(PAD_ORDER_SLOTS == BIND_PLAYERS, "a box per player");
+static _Atomic int order_request;  // the page's: PAD_ORDER_OPEN / CANCEL / CONFIRM
+static _Atomic bool order_open;
+static PadOrder order;  // the draft (main thread)
+static _Atomic uint32_t order_box[BIND_PLAYERS];   // its boxes and the holds to leave, for the page
+static _Atomic uint64_t order_hold[BIND_PLAYERS];
+
+static SDL_Gamepad **order_slot(int i) { return i ? &extra_pad[i - 1] : &pad; }
+static SDL_Gamepad *order_pad(SDL_JoystickID id) {
+    for (int i = 0; i < PAD_ORDER_SLOTS; i++)
+        if (*order_slot(i) && SDL_GetGamepadID(*order_slot(i)) == id) return *order_slot(i);
+    return NULL;
+}
+static int order_first(void) { return pads_from_p2() ? 1 : 0; }
+static void order_publish(void) {
+    for (int i = 0; i < BIND_PLAYERS; i++) order_box[i] = order.box[i], order_hold[i] = order.hold[i];
+}
+
+// The menu's confirm (else back) button, as menu.mm's key_from_pad has them
+static SDL_GamepadButton order_button(bool confirm) {
+    extern bool menu_ab_swapped(void);  // runtime/ui/menu.mm
+    return confirm != menu_ab_swapped() ? SDL_GAMEPAD_BUTTON_EAST : SDL_GAMEPAD_BUTTON_SOUTH;
+}
+
+// The draft confirmed: the controllers to their players (pad_order_apply). None is opened or closed.
+static void order_apply(void) {
+    SDL_Gamepad *was[PAD_ORDER_SLOTS], *now[PAD_ORDER_SLOTS] = {NULL};
+    uint32_t id[PAD_ORDER_SLOTS];
+    int to[PAD_ORDER_SLOTS];
+    bool moved = false;
+    for (int i = 0; i < PAD_ORDER_SLOTS; i++) {
+        was[i] = *order_slot(i);
+        id[i] = was[i] ? SDL_GetGamepadID(was[i]) : 0;
+    }
+    pad_order_apply(&order, id, order_first(), to);
+    for (int i = 0; i < PAD_ORDER_SLOTS; i++) {
+        if (to[i] < 0) continue;
+        now[to[i]] = was[i];
+        if (to[i] == i) continue;
+        moved = true;
+        LOG("[input] controller order: player %d: %s\n", to[i] + 1, SDL_GetGamepadName(was[i]));
+    }
+    if (!moved) return;  // (they were those players already)
+    for (int i = 0; i < PAD_ORDER_SLOTS; i++) *order_slot(i) = now[i];
+    note_family();  // (and note_players)
+    recompute_pad();
+    for (int i = 0; i < EXTRA_PADS; i++) recompute_extra(i);
+    style_changed();
+}
+
+static void order_close(bool confirm) {
+    if (confirm && !pad_order_ready(&order, order_first())) return;  // (no player 1 yet: Esc / B to leave)
+    if (confirm) order_apply();
+    order_open = false;
+}
+
+// Main thread, before the menu sees the event (as bind_capture_event): true = the page took it. With the page up a
+// controller's buttons and sticks are its own, so L and R don't switch the menu's tabs and nothing moves its cursor;
+// a release still goes on to the menu, which then never keeps a button held from before the page as down. Guide and
+// Back + Start go on to the menu too, so a controller can still close it (input_pad_order_tick then cancels the
+// page). Enter and Esc are the page's; the other keys and the mouse stay the menu's. A controller unplugged is out of
+// the draft (the event goes on to input_handle_event, which closes it).
+bool input_pad_order_event(const SDL_Event *e) {
+    if (!order_open) return false;
+    switch (e->type) {
+    case SDL_EVENT_KEY_DOWN:
+        if (e->key.scancode == SDL_SCANCODE_ESCAPE || e->key.scancode == SDL_SCANCODE_AC_BACK) order_close(false);
+        else if (e->key.scancode != SDL_SCANCODE_RETURN && e->key.scancode != SDL_SCANCODE_KP_ENTER) return false;
+        else if (!e->key.repeat) order_close(true);
+        return true;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+        bool down = e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+        if (e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE || e->gbutton.button == SDL_GAMEPAD_BUTTON_BACK ||
+            e->gbutton.button == SDL_GAMEPAD_BUTTON_START) return false;  // (the menu's open / close: menu.mm)
+        SDL_Gamepad *g = order_pad(e->gbutton.which);
+        int lead = pad_order_lead(&order);
+        if (g && (e->gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ||
+                  e->gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
+            pad_order_lr(&order, e->gbutton.which, SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER) +
+                         SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER), SDL_GetTicks(), order_first());
+            order_publish();
+        } else if (down && e->gbutton.button == order_button(false)) {
+            if (lead < 0 || order.box[lead] == e->gbutton.which) order_close(false);
+        } else if (down && e->gbutton.button == order_button(true)) {
+            if (lead >= 0 && order.box[lead] == e->gbutton.which) order_close(true);
+        }
+        return down;
+    }
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        return true;
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        pad_order_out(&order, e->gdevice.which, true);
+        order_publish();
+        return false;
+    default:
+        return false;
+    }
+}
+
+// Main thread, once per round of events: the page's requests, the menu closed under it, and the holds to leave
+void input_pad_order_tick(bool menu_open) {
+    int req = atomic_exchange(&order_request, 0);
+    if (!order_open) {
+        if (req != PAD_ORDER_OPEN || !menu_open) return;
+        memset(&order, 0, sizeof order);  // (a new draft: every box empty)
+        order_publish();
+        order_open = true;
+        return;
+    }
+    if (req == PAD_ORDER_CANCEL || !menu_open) { order_close(false); return; }
+    if (req == PAD_ORDER_CONFIRM) { order_close(true); return; }
+    if (pad_order_tick(&order, SDL_GetTicks())) order_publish();
+}
+
+// The page's side, from any thread
+void input_pad_order_request(int what) { order_request = what; }
+bool input_pad_order_active(void) { return order_open; }
+uint32_t input_pad_order_box(int player, float *leaving) {
+    if (player < 1 || player > BIND_PLAYERS) return 0;
+    uint64_t since = order_hold[player - 1], now = SDL_GetTicks();
+    float part = since ? (float)(now - since) / PAD_ORDER_LEAVE_MS : 0;
+    if (leaving) *leaving = part > 1 ? 1 : part;
+    return order_box[player - 1];
+}
+int input_pad_order_lead(void) {
+    for (int p = 1; p <= BIND_PLAYERS; p++)
+        if (order_box[p - 1]) return p;
+    return 0;
+}
+bool input_pad_order_ready(void) { return pads_from_p2() || order_box[0]; }
+int input_pad_order_button(bool confirm) { return order_button(confirm); }
+// What a controller holds right now, for the page's drawing of it: *held has a bit per PADB_* value (the triggers as
+// in recompute_pad), stick[] the left and the right stick's x and y (y up), *family its button names' (as
+// input_pad_family); false when it has gone. Read from the controller itself under SDL's lock, as
+// input_preview_stick.
+bool input_pad_order_state(uint32_t id, uint32_t *held, int32_t stick[4], int *family) {
+    SDL_LockJoysticks();
+    SDL_Gamepad *g = id ? SDL_GetGamepadFromID(id) : NULL;
+    if (g) {
+        uint32_t host = 0;
+        for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+            if (SDL_GetGamepadButton(g, (SDL_GamepadButton)i)) host |= 1u << i;
+        if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
+        if (SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) host |= 1u << PADB_RTRIGGER;
+        *held = host;
+        stick[0] = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX);
+        stick[1] = -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY);
+        stick[2] = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTX);
+        stick[3] = -SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY);
+        *family = family_of(g);
     }
     SDL_UnlockJoysticks();
     return g != NULL;

@@ -8,6 +8,7 @@
 
 #include "../hle.h"
 #include "../input_bind.h"
+#include "../settings.h"
 
 _Static_assert(PADB_LTRIGGER == SDL_GAMEPAD_BUTTON_COUNT, "trigger pseudo-buttons follow SDL's buttons");
 
@@ -140,7 +141,11 @@ bool bind_is_default_slot(int dev, int player, int slot) {
     return dev == BIND_DEV_PAD ? bind_pad_table(player)[slot] == k_def_pad[slot] : g_bind_key[slot] == k_def_key[slot];
 }
 
-int bind_prompt_host(int slot) { return slot >= 0 && slot < BIND_PAD_COUNT ? bind_pad_table(1)[slot] : -1; }
+// (with "Controllers start at player 2" player 1 is the keyboard, so the first controller is player 2's)
+int bind_first_pad_player(void) { return g_settings.pads_from_p2 ? 2 : 1; }
+int bind_prompt_host(int slot) {
+    return slot >= 0 && slot < BIND_PAD_COUNT ? bind_pad_table(bind_first_pad_player())[slot] : -1;
+}
 
 // ------------------------------------------------------------------ capture
 static _Atomic int cap_dev = -1, cap_player = 1, cap_slot = -1;

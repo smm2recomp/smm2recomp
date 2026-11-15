@@ -50,6 +50,33 @@ const char *input_player_pad_name(int player);  // NULL = none connected
 int input_player_family(int player);           // as input_pad_family; none connected: bind_label_family
 int input_pad_player(uint32_t id);             // the player an SDL_JoystickID belongs to, -1 = nobody's
 
+// Controls > Controller order (runtime/hle/input.c, drawn by runtime/ui/controls_ui.mm), as the Switch's "Change
+// Grip/Order" screen. While its page is up it keeps a draft, a box per player: a controller that holds L + R joins in
+// the lowest empty box (from player 2's with "Controllers start at player 2"), one that lets go and holds L + R again
+// for two seconds leaves its box, and no controller's buttons reach the menu but Guide and Back + Start, which still
+// close it (and the page with it). Confirmed, the controllers that joined become their boxes' players and the others
+// follow in the order they had; cancelled, nothing has changed. Not saved: the next start has the controllers in the
+// order they are found again.
+enum { PAD_ORDER_OPEN = 1, PAD_ORDER_CANCEL, PAD_ORDER_CONFIRM };
+void input_pad_order_request(int what);        // the page: open it (in the in-game menu only) / leave it; any thread
+bool input_pad_order_active(void);             // it is up
+// the controller in that player's box (its SDL_JoystickID, 0 = empty); *leaving: its hold to leave, 0 (none) to 1
+uint32_t input_pad_order_box(int player, float *leaving);
+int input_pad_order_lead(void);                // the lowest player with a controller in its box, 0 = none has joined
+bool input_pad_order_ready(void);              // there is a player 1: the draft can be confirmed
+// The menu's confirm (else back) button, an SDL_GamepadButton: on the lead's controller it confirms the draft (once
+// ready) / cancels it; back on any controller cancels while none has joined. Enter and Esc do the same.
+int input_pad_order_button(bool confirm);
+// a controller now: *held a bit per PADB_* value, stick[] left x, y, right x, y (y up), *family as input_pad_family;
+// false = it has gone
+bool input_pad_order_state(uint32_t id, uint32_t *held, int32_t stick[4], int *family);
+// Main thread, before the menu sees the event: true = taken by the page (Enter, Esc, a controller's presses and sticks
+// but Guide, Back and Start)
+bool input_pad_order_event(const SDL_Event *e);
+// Main thread, after each round of events: opens / leaves the page as asked, cancels it with the menu, and takes a
+// controller that has held L + R for two seconds out of its box
+void input_pad_order_tick(bool menu_open);
+
 // "Click a binding, then press": begun from the UI; the next press (any thread's SDL event) is taken. Escape cancels,
 // as does BIND_CAPTURE_MS without a press. On a conflict the two inputs swap. A controller capture is for one
 // player: a press on another player's controller is not taken, and a player still following player 1 gets its own
@@ -86,8 +113,18 @@ static inline int bind_pad_key_player(const char *key, const char **name) {
 int bind_slot_from_name(const char *name);
 int bind_pad_from_name(const char *name);
 
+// The player whose controller bindings the button prompts and the menus' A / B follow (runtime/ui/menu.mm
+// menu_ab_swapped): the first controller's, player 1, or player 2 with "Controllers start at player 2"
+int bind_first_pad_player(void);
+// The menus' A and B trade places (the bottom face button confirms, the right one goes back) as they do in the
+// game's menus: bound_swapped, that player's A on the bottom face button and B on the right one, and then "A and
+// B swapped in menus" (setting) trades them again, as runtime/hle/input.c does for the game. That setting is
+// player 1's controller's alone, so with "Controllers start at player 2" (from_p2) it changes nothing here either.
+static inline bool bind_menu_ab_swapped(bool bound_swapped, bool setting, bool from_p2) {
+    return bound_swapped != (setting && !from_p2);
+}
 // Button prompts (runtime/nvn/texpatch.c): the controller button now driving Switch input `slot` (BIND_A..) for
-// player 1
+// bind_first_pad_player
 int bind_prompt_host(int slot);
 
 #ifdef __cplusplus

@@ -609,6 +609,14 @@ test-glyph-set: build/test_glyph_set
 	./build/test_glyph_set
 .PHONY: test-glyph-set
 
+# Controls > Controller order: who becomes which player (runtime/hle/pad_order.h), no game files
+build/test_pad_order: tools/test_pad_order.c runtime/hle/pad_order.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -o $@ tools/test_pad_order.c
+test-pad-order: build/test_pad_order
+	./build/test_pad_order
+.PHONY: test-pad-order
+
 # Shader compile-ahead alone: scan a RomFS folder, translate, compile (tools/test_shader_ahead.m)
 build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c runtime/nvn/shader_ahead.h runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/nvn/maxwell/shader.h runtime/zstd_lib.c
 	clang -O2 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shader_ahead.m runtime/nvn/shader_ahead.c \

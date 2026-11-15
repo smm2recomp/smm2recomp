@@ -21,7 +21,7 @@ python3 scripts/test_check_no_proprietary.py -q
 python3 scripts/test_check_package.py -q
 if $recomp; then
   make -s -C "$root/recomp" test-buildsync test-title-letters test-course-preload test-bg-mute test-bind-ini \
-    test-stick-deadzone test-glyph-set
+    test-stick-deadzone test-glyph-set test-pad-order
 fi
 if $recomp && [ "$(uname -s)" = Darwin ]; then
   make -s -C "$root/recomp" GAME=smm2 -j8 runtime-objs
