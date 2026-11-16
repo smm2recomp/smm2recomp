@@ -25,6 +25,8 @@
 #else
 #include "imgui_impl_vulkan.h"
 extern "C" bool vk_imgui_backend_init(void);  // runtime/nvn/vulkan/imgui_glue.cpp
+extern "C" void vk_queue_lock(void);          // runtime/nvn/vulkan/device.c
+extern "C" void vk_queue_unlock(void);
 #endif
 
 extern "C" {
@@ -44,6 +46,7 @@ extern "C" const char *menu_clipboard(void);  // (below: the system clipboard's 
 #include "../platform.h"
 #include "../nvn/framegen.h"
 #include "system_font.h"
+#include "glyph_set.h"
 }
 
 // ------------------------------------------------------------------ state shared with the main thread
@@ -157,6 +160,7 @@ static ImGuiKey key_from_pad(Uint8 b) {
 // directly when the player last used a keyboard, an on-screen keyboard (d-pad + A, B deletes, Start / + OK) when
 // they last used a controller.
 static std::atomic<int> g_kbd{0};  // 1 open, 2 confirmed, 3 cancelled
+static std::atomic<unsigned> g_kbd_seq{0};  // one more for each dialog (the name entry's characters start again)
 static std::atomic<bool> g_last_pad{false};
 static char g_kbd_text[400];  // (a comment: 75 characters of up to 4 bytes)
 static char g_kbd_title[200];  // the game's header or guide text, if it gives one
@@ -332,6 +336,19 @@ static ImFont *g_menu_font, *g_menu_font_big;  // the menu window (Baloo 2); eve
 static ImFont *g_nes_font, *g_nes_font_big;    // the NES theme's menu window: Press Start 2P (runtime/nes_font.c)
 extern "C" const unsigned char g_nes_font_ttf[];
 extern "C" const unsigned int g_nes_font_ttf_len;
+// The name entry's Chinese, Japanese and Korean text (#99): g_font_big has the dialog's characters (glyph_set.h) merged
+// in from the console's fonts, the ones the game draws the name with afterwards. keyboard_draw notes new characters,
+// menu_render builds the atlas again before the next frame; without the fonts they stay '?', as before. A font is
+// read only when the characters need it, in the order for the game's language (settings_language()), one per frame.
+extern "C" uint8_t *pl_dump_font_ttf(unsigned type, size_t *len);  // runtime/hle/pl.c
+static struct { uint8_t *ttf; size_t len; } g_cjk_font[CJK_FONTS];  // read when first needed, then kept
+static bool g_cjk_tried[CJK_FONTS];
+static int g_cjk_order[CJK_FONTS] = {0, 1, 2, 3, 4};  // (glyph_set.h: taken when a dialog opens)
+static int g_cjk_built[CJK_FONTS] = {0, 1, 2, 3, 4};  // the order the atlas was last built in
+static GlyphSet g_cjk;
+static ImWchar g_cjk_ranges[2 * GLYPHS_MAX + 1];  // (the atlas reads them when it's built, not when the font is added)
+static bool g_cjk_stale;  // characters were added since the atlas was built
+static bool g_cjk_more;   // the last build lacks characters that a font not read yet may have
 static int g_tab, g_tab_request = -2;  // (-2: no request; -1 is the Prelaunch tab)
 static int g_focus_tab = -99;  // put the nav cursor on this tab next frame (-100: the selected one; -99: none)
 static int g_focus_frames;
@@ -449,21 +466,12 @@ static void style_init(void) {
 }
 
 
-#ifdef __APPLE__
-static void init(id<MTLDevice> dev) {
-#else
-static void init(void) {
-#endif
-    IMGUI_CHECKVERSION();
-    g_ctx = ImGui::CreateContext();
-    ImGui::SetCurrentContext(g_ctx);
+// The atlas's fonts, from nothing: init, and fonts_rebuild when the name entry needs more characters. cjk: with the
+// console's fonts, for g_cjk's characters, merged into g_font_big. true: they were (there is a font to merge into)
+static bool fonts_build(bool cjk) {
     ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-    io.IniFilename = NULL;
-    // the system clipboard for the text fields (Ctrl / Cmd+V, and their Paste button: option_rows.mm)
-    ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext *) -> const char * { return menu_clipboard(); };
-    ImGui::GetPlatformIO().Platform_SetClipboardTextFn = [](ImGuiContext *, const char *t) { SDL_SetClipboardText(t); };
+    io.Fonts->Clear();
+    g_font = g_font_big = g_menu_font = g_menu_font_big = g_nes_font = g_nes_font_big = NULL;
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     char sys[1024];
@@ -473,6 +481,19 @@ static void init(void) {
         g_font = io.Fonts->AddFontFromFileTTF(sys, 34 * g_atlas_scale, &cfg);
         if (g_font) g_font_big = io.Fonts->AddFontFromFileTTF(sys, 56 * g_atlas_scale, &cfg);
         LOG("[menu] font %s\n", sys);
+    }
+    bool merged = cjk && g_font_big;
+    if (merged) {  // (right after the font they merge into; the first font that has a character draws it)
+        ImFontConfig mc;
+        mc.MergeMode = true;
+        mc.FontDataOwnedByAtlas = false;
+        mc.OversampleH = 1;
+        mc.GlyphRanges = g_cjk_ranges;
+        for (int k = 0; k < CJK_FONTS; k++) {
+            int i = g_cjk_order[k];
+            if (g_cjk_font[i].ttf)
+                io.Fonts->AddFontFromMemoryTTF(g_cjk_font[i].ttf, (int)g_cjk_font[i].len, 56 * g_atlas_scale, &mc);
+        }
     }
     // the menu window itself: Baloo 2 SemiBold, as on the start screen (shipped, OFL), at its Settings window's sizes; the
     // FPS counter, overlays and on-screen keyboard keep the fonts above
@@ -498,6 +519,106 @@ static void init(void) {
     }
     if (!g_font_big) g_font_big = g_font;
     if (!g_menu_font || !g_menu_font_big) g_menu_font = g_font, g_menu_font_big = g_font_big;
+    return merged;
+}
+
+// The next console font for the characters g_font_big lacks, each read once (the Korean one only for Hangul). false:
+// none was left to read
+static bool cjk_font_read(void) {
+    bool hangul = false;
+    for (int i = 0; i < g_cjk.n; i++)
+        if (glyphs_hangul(g_cjk.cp[i]) && !g_font_big->FindGlyphNoFallback(g_cjk.cp[i])) hangul = true;
+    for (int f; (f = glyphs_next_font(g_cjk_order, g_cjk_tried, hangul)) >= 0;) {
+        g_cjk_tried[f] = true;
+        if ((g_cjk_font[f].ttf = pl_dump_font_ttf((unsigned)f, &g_cjk_font[f].len))) return true;
+    }
+    return false;
+}
+
+// The characters g_font_big still lacks: a font not read yet may have them (g_cjk_more), or none can add them and
+// they are never built for again (merged: false, the atlas was built without the console's fonts). The count
+static int cjk_lacking(bool merged) {
+    int missing = 0;
+    for (int i = g_cjk.n - 1; i >= 0; i--) {
+        uint16_t c = g_cjk.cp[i];
+        if (g_font_big->FindGlyphNoFallback(c)) continue;
+        missing++;
+        if (merged && !glyphs_all_tried(g_cjk_tried, c)) g_cjk_more = true;
+        else glyphs_fail(&g_cjk, c);
+    }
+    return missing;
+}
+
+// The name entry has characters the atlas lacks (keyboard_draw): the atlas and its texture again, with them. Only in
+// menu_render before the backend's NewFrame, between two frames: every ImFont of the old atlas is gone after this.
+#ifdef __APPLE__
+static void fonts_rebuild(id<MTLDevice> dev) {
+#else
+static void fonts_rebuild(void) {
+#endif
+    g_cjk_stale = false;
+    uint64_t t0 = SDL_GetTicks();
+    bool any = false;
+    for (int i = 0; i < CJK_FONTS; i++) any |= g_cjk_font[i].ttf != NULL;
+    if (!any || g_cjk_more) {
+        any |= cjk_font_read();  // (the first characters, or ones the last build lacked)
+    } else if (!glyphs_same_order(g_cjk_order, g_cjk_built)) {  // (the language changed: its first font, if not read)
+        bool hangul = false;
+        for (int i = 0; i < g_cjk.n; i++) hangul |= glyphs_hangul(g_cjk.cp[i]);
+        int f = glyphs_reorder_font(g_cjk_order, g_cjk_tried, hangul);
+        if (f >= 0) g_cjk_tried[f] = true, g_cjk_font[f].ttf = pl_dump_font_ttf((unsigned)f, &g_cjk_font[f].len);
+    }
+    memcpy(g_cjk_built, g_cjk_order, sizeof g_cjk_built);
+    g_cjk_more = false;
+    if (!any) {  // (a source checkout started without the dump: the atlas stays as it is)
+        static bool said;
+        if (!said) said = true, LOG("[menu] no console font in fonts/: the name entry's other scripts stay ?\n");
+        cjk_lacking(false);
+        return;
+    }
+    ImGuiIO &io = ImGui::GetIO();
+    glyphs_ranges(&g_cjk, g_cjk_ranges);
+    bool merged = fonts_build(true);
+    io.Fonts->Build();
+    if (io.Fonts->TexHeight > 8192) {  // (more than every GPU takes: the atlas as it was at the start)
+        LOG("[menu] fonts: %dx%d with %d cjk is too tall, built without them\n", io.Fonts->TexWidth,
+            io.Fonts->TexHeight, g_cjk.n);
+        merged = fonts_build(false);
+        io.Fonts->Build();
+    }
+#ifdef __APPLE__
+    ImGui_ImplMetal_DestroyFontsTexture();
+    bool uploaded = ImGui_ImplMetal_CreateFontsTexture(dev);
+#else
+    vk_queue_lock();  // (it waits for the queue, then submits the upload: the present thread uses the queue too)
+    bool uploaded = ImGui_ImplVulkan_CreateFontsTexture();
+    vk_queue_unlock();
+#endif
+    if (!uploaded) LOG("[menu] fonts: uploading the %dx%d atlas failed\n", io.Fonts->TexWidth, io.Fonts->TexHeight);
+    int n = g_cjk.n, missing = cjk_lacking(merged);
+    if (g_cjk_more) g_cjk_stale = true;  // (the next font and the atlas again next frame: one read per frame)
+    LOG("[menu] fonts rebuilt: %d cjk, %d missing, atlas %dx%d, %d ms\n", n, missing, io.Fonts->TexWidth,
+        io.Fonts->TexHeight, (int)(SDL_GetTicks() - t0));
+}
+
+#ifdef __APPLE__
+static void init(id<MTLDevice> dev) {
+#else
+static void init(void) {
+#endif
+    IMGUI_CHECKVERSION();
+    g_ctx = ImGui::CreateContext();
+    ImGui::SetCurrentContext(g_ctx);
+    ImGuiIO &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    io.IniFilename = NULL;
+    // the system clipboard for the text fields (Ctrl / Cmd+V, and their Paste button: option_rows.mm)
+    ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext *) -> const char * {
+        return menu_clipboard();
+    };
+    ImGui::GetPlatformIO().Platform_SetClipboardTextFn = [](ImGuiContext *, const char *t) { SDL_SetClipboardText(t); };
+    fonts_build(false);
     style_init();
 #ifdef __APPLE__
     ImGui_ImplMetal_Init(dev);
@@ -960,6 +1081,22 @@ RT_ON_RESET(menu_reset) {
 }
 
 static void keyboard_draw(ImGuiIO &io, float scale) {
+    // A new dialog: just its own characters, the font order for the language the game is set to (from a change of it
+    // until the game is restarted, the overlay's shapes can differ from the game's). Not was_open below: a reboot
+    // with the dialog up (menu_reset) leaves it set
+    static unsigned seq;
+    if (seq != g_kbd_seq.load()) {
+        seq = g_kbd_seq.load();
+        glyphs_clear(&g_cjk);
+        g_cjk_more = false;
+        glyphs_font_order(settings_language(), g_cjk_order);
+    }
+    if (glyphs_scan(&g_cjk, g_kbd_text, g_kbd_title)) {  // (a ? this frame, drawn from the next)
+        for (int i = 0; i < g_cjk.n; i++)
+            if (!g_font_big->FindGlyphNoFallback(g_cjk.cp[i])) g_cjk_stale = true;  // (the atlas may have them all)
+        // the language changed since the atlas was built: again in its order, for the shapes of shared characters
+        if (!glyphs_same_order(g_cjk_order, g_cjk_built)) g_cjk_stale = true;
+    }
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 120));
     float w = fminf(io.DisplaySize.x * 0.9f, 1100 * scale);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -1015,6 +1152,7 @@ extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, in
     snprintf(g_kbd_text, sizeof g_kbd_text, "%s", initial ? initial : "");
     g_kbd_max = max_len > 0 && max_len < (int)sizeof g_kbd_text / 4 ? max_len : 8;
     input_reset();
+    g_kbd_seq++;
     g_kbd = 1;
     // (test) LARECOMP_KBD_AUTO=<text>: answer at once
     if (getenv("LARECOMP_KBD_AUTO")) { snprintf(g_kbd_text, sizeof g_kbd_text, "%s", getenv("LARECOMP_KBD_AUTO")); g_kbd = 2; }
@@ -1273,6 +1411,11 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (!g_inited) init();
 #endif
     ImGui::SetCurrentContext(g_ctx);
+#ifdef __APPLE__
+    if (g_cjk_stale) fonts_rebuild(dev);
+#else
+    if (g_cjk_stale) fonts_rebuild();
+#endif
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)tw, (float)th);
     io.DisplayFramebufferScale = ImVec2(1, 1);

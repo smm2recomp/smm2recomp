@@ -601,6 +601,14 @@ test-stick-deadzone: build/test_stick_deadzone
 	./build/test_stick_deadzone
 .PHONY: test-stick-deadzone
 
+# The name entry's character set for the console's fonts (runtime/ui/glyph_set.h), no game files
+build/test_glyph_set: tools/test_glyph_set.c runtime/ui/glyph_set.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -o $@ tools/test_glyph_set.c
+test-glyph-set: build/test_glyph_set
+	./build/test_glyph_set
+.PHONY: test-glyph-set
+
 # Shader compile-ahead alone: scan a RomFS folder, translate, compile (tools/test_shader_ahead.m)
 build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c runtime/nvn/shader_ahead.h runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/nvn/maxwell/shader.h runtime/zstd_lib.c
 	clang -O2 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shader_ahead.m runtime/nvn/shader_ahead.c \

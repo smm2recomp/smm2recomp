@@ -133,6 +133,19 @@ static void load_dump_font(unsigned type) {
     }
 }
 
+// The same file as a TTF in a malloc'd buffer of the caller's (NULL without one): the overlay's name entry draws
+// Chinese, Japanese and Korean text with the game's own fonts (runtime/ui/menu.mm, #99; not the copy above, which is
+// in the HLE heap and goes with a reset)
+uint8_t *pl_dump_font_ttf(unsigned type, size_t *len) {
+    char path[96];
+    snprintf(path, sizeof path, "fonts/%s.bfttf", dump_name[type]);
+    uint8_t *d = read_file(path, len);
+    if (d && (*len = bfttf_decode(d, *len))) return d;
+    free(d);
+    snprintf(path, sizeof path, "fonts/%s.ttf", dump_name[type]);
+    return read_file(path, len);
+}
+
 static void load_fonts(void) {
     if (g_fonts_loaded) return;
     g_fonts_loaded = 1;
