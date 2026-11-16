@@ -149,6 +149,14 @@ void settings_load(void) {
         else if (!strcmp(key, "diff_hero")) g_settings.diff_hero = atoi(val) != 0;
         else if (!strcmp(key, "tunic")) { for (int i = 0; i < N_TUNIC_COLOURS; i++) if (g_tunic_colours[i] && !strcmp(val, g_tunic_colours[i])) g_settings.tunic = i; }  // (a game may name fewer)
         else if (!strcmp(key, "hearts")) { for (int i = 0; i < N_HEART_COLOURS; i++) if (g_heart_colours[i] && !strcmp(val, g_heart_colours[i])) g_settings.hearts = i; }
+        else if (!strcmp(key, "stick_deadzone_l")) {
+            int n = atoi(val);
+            g_settings.stick_deadzone_l = n < 0 ? 0 : n > 30 ? 30 : n;
+        }
+        else if (!strcmp(key, "stick_deadzone_r")) {
+            int n = atoi(val);
+            g_settings.stick_deadzone_r = n < 0 ? 0 : n > 30 ? 30 : n;
+        }
         else bind_settings_load(key, val);  // bind_pad_* / bind_key_*: runtime/hle/bindings.c
     }
     fclose(f);
@@ -189,6 +197,8 @@ void settings_save(void) {
     fprintf(f, "dpad_move = %d\n", g_settings.dpad_move);
     fprintf(f, "menu_ab_swap = %d\n", g_settings.menu_ab_swap);
     fprintf(f, "pads_from_p2 = %d\n", g_settings.pads_from_p2);
+    fprintf(f, "stick_deadzone_l = %d\n", g_settings.stick_deadzone_l);
+    fprintf(f, "stick_deadzone_r = %d\n", g_settings.stick_deadzone_r);
     fprintf(f, "move_360 = %d\nblur_removal = %d\nhide_hero_icon = %d\n", g_settings.move_360, g_settings.blur_removal,
             g_settings.hide_hero_icon);
     static const char *const prompts[] = {"auto", "nintendo", "xbox", "playstation"};

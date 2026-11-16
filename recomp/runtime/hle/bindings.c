@@ -1,5 +1,6 @@
 // Control remapping: tables runtime/hle/input.c reads on every input event (so a change applies at once), the
-// capture used by the "click a binding, then press" UI, and their larecomp.ini lines. See runtime/input_bind.h.
+// capture used by the "click a binding, then press" UI, and their larecomp.ini lines (bind_pad_<input>, bind_pad_pN
+// and bind_pad_pN_<input> for a player 2-4's own controller table, bind_key_<input>). See runtime/input_bind.h.
 #include <SDL3/SDL.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -25,7 +26,24 @@ _Static_assert(PADB_LTRIGGER == SDL_GAMEPAD_BUTTON_COUNT, "trigger pseudo-button
     SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D, SDL_SCANCODE_KP_8, SDL_SCANCODE_KP_5, \
     SDL_SCANCODE_KP_4, SDL_SCANCODE_KP_6}
 static const int16_t k_def_pad[BIND_PAD_COUNT] = DEF_PAD, k_def_key[BIND_KEY_COUNT] = DEF_KEY;
-int16_t g_bind_pad[BIND_PAD_COUNT] = DEF_PAD, g_bind_key[BIND_KEY_COUNT] = DEF_KEY;
+int16_t g_bind_key[BIND_KEY_COUNT] = DEF_KEY;
+// The controller tables, one per player (#100). Players 2-4 follow player 1's until one is changed for them
+// (pad_custom): from then on they have their own.
+_Static_assert(BIND_PLAYERS == 4, "one DEF_PAD per player");
+static int16_t pad_tables[BIND_PLAYERS][BIND_PAD_COUNT] = {DEF_PAD, DEF_PAD, DEF_PAD, DEF_PAD};
+static bool pad_custom[BIND_PLAYERS] = {true};
+
+static bool valid_player(int player) { return player >= 1 && player <= BIND_PLAYERS; }
+const int16_t *bind_pad_table(int player) {
+    return pad_tables[valid_player(player) && pad_custom[player - 1] ? player - 1 : 0];
+}
+bool bind_pad_custom(int player) { return valid_player(player) && pad_custom[player - 1]; }
+// "controller" / "keyboard" for the log, players 2-4's controllers by their number
+static const char *dev_name(int dev, int player) {
+    static const char *const pads[BIND_PLAYERS] = {"controller", "player 2 controller", "player 3 controller",
+                                                   "player 4 controller"};
+    return dev == BIND_DEV_PAD ? pads[valid_player(player) ? player - 1 : 0] : "keyboard";
+}
 
 static const char *const k_ini[BIND_KEY_COUNT] = {
     "a", "b", "x", "y", "lstick", "rstick", "l", "r", "zl", "zr", "plus", "minus", "left", "up", "right", "down",
@@ -93,59 +111,76 @@ int bind_label_family(void) {
            t == SDL_GAMEPAD_TYPE_PS3 || t == SDL_GAMEPAD_TYPE_PS4 || t == SDL_GAMEPAD_TYPE_PS5 ? 2 : 0;
 }
 
-static void result(int kind, int dev, int slot, int other);
+static void result(int kind, int dev, int player, int slot, int other);
 
-void bind_reset(int dev) {
-    if (dev == BIND_DEV_PAD) memcpy(g_bind_pad, k_def_pad, sizeof g_bind_pad);
-    else memcpy(g_bind_key, k_def_key, sizeof g_bind_key);
-    LOG("[input] %s bindings reset to the defaults\n", dev == BIND_DEV_PAD ? "controller" : "keyboard");
-    result(5, dev, -1, -1);
+// (a player 2-4 that followed player 1 has its own table from here: the defaults, whatever player 1's are)
+void bind_reset(int dev, int player) {
+    if (dev == BIND_DEV_PAD) {
+        if (!valid_player(player)) return;
+        memcpy(pad_tables[player - 1], k_def_pad, sizeof k_def_pad);
+        pad_custom[player - 1] = true;
+    } else memcpy(g_bind_key, k_def_key, sizeof g_bind_key);
+    LOG("[input] %s bindings reset to the defaults\n", dev_name(dev, player));
+    result(5, dev, player, -1, -1);
 }
 
-bool bind_is_default(int dev) {
-    return dev == BIND_DEV_PAD ? !memcmp(g_bind_pad, k_def_pad, sizeof g_bind_pad) : !memcmp(g_bind_key, k_def_key, sizeof g_bind_key);
+void bind_pad_follow(int player) {
+    if (player < 2 || player > BIND_PLAYERS) return;
+    pad_custom[player - 1] = false;
+    LOG("[input] %s bindings same as player 1\n", dev_name(BIND_DEV_PAD, player));
+    result(6, BIND_DEV_PAD, player, -1, -1);
 }
 
-bool bind_is_default_slot(int dev, int slot) {
-    return dev == BIND_DEV_PAD ? g_bind_pad[slot] == k_def_pad[slot] : g_bind_key[slot] == k_def_key[slot];
+bool bind_is_default(int dev, int player) {
+    return dev == BIND_DEV_PAD ? !memcmp(bind_pad_table(player), k_def_pad, sizeof k_def_pad) :
+                                 !memcmp(g_bind_key, k_def_key, sizeof g_bind_key);
 }
 
-int bind_prompt_host(int slot) { return slot >= 0 && slot < BIND_PAD_COUNT ? g_bind_pad[slot] : -1; }
+bool bind_is_default_slot(int dev, int player, int slot) {
+    return dev == BIND_DEV_PAD ? bind_pad_table(player)[slot] == k_def_pad[slot] : g_bind_key[slot] == k_def_key[slot];
+}
+
+int bind_prompt_host(int slot) { return slot >= 0 && slot < BIND_PAD_COUNT ? bind_pad_table(1)[slot] : -1; }
 
 // ------------------------------------------------------------------ capture
-static _Atomic int cap_dev = -1, cap_slot = -1;
+static _Atomic int cap_dev = -1, cap_player = 1, cap_slot = -1;
 static _Atomic uint64_t cap_deadline;
-static _Atomic int res_kind, res_dev, res_slot, res_other, res_serial;
+static _Atomic int res_kind, res_dev, res_player, res_slot, res_other, res_serial;
 
-static void result(int kind, int dev, int slot, int other) {
-    res_kind = kind, res_dev = dev, res_slot = slot, res_other = other;
+static void result(int kind, int dev, int player, int slot, int other) {
+    res_kind = kind, res_dev = dev, res_player = player, res_slot = slot, res_other = other;
     res_serial++;
 }
 
-void bind_capture_begin(int dev, int slot) {
+void bind_capture_begin(int dev, int player, int slot) {
     if (slot < 0 || slot >= (dev == BIND_DEV_PAD ? BIND_PAD_COUNT : BIND_KEY_COUNT)) return;
+    if (dev != BIND_DEV_PAD) player = 1;  // (the keyboard is player 1's)
+    if (!valid_player(player)) return;
     cap_deadline = SDL_GetTicks() + BIND_CAPTURE_MS;
     cap_slot = slot;
+    cap_player = player;
     cap_dev = dev;
 }
 
 void bind_capture_cancel(void) {
     if (cap_dev < 0) return;
-    result(3, cap_dev, cap_slot, -1);
+    result(3, cap_dev, cap_player, cap_slot, -1);
     cap_dev = -1;
 }
 
-bool bind_capture_active(int *dev, int *slot, int *ms_left) {
+bool bind_capture_active(int *dev, int *player, int *slot, int *ms_left) {
     int d = cap_dev;
-    if (d >= 0 && SDL_GetTicks() >= cap_deadline) { result(4, d, cap_slot, -1); cap_dev = d = -1; }
+    if (d >= 0 && SDL_GetTicks() >= cap_deadline) { result(4, d, cap_player, cap_slot, -1); cap_dev = d = -1; }
     if (dev) *dev = d;
+    if (player) *player = d >= 0 ? cap_player : -1;
     if (slot) *slot = d >= 0 ? cap_slot : -1;
     if (ms_left) *ms_left = d >= 0 ? (int)(cap_deadline - SDL_GetTicks()) : 0;
     return d >= 0;
 }
 
-int bind_last_result(int *dev, int *slot, int *other, int *serial) {
+int bind_last_result(int *dev, int *player, int *slot, int *other, int *serial) {
     if (dev) *dev = res_dev;
+    if (player) *player = res_player;
     if (slot) *slot = res_slot;
     if (other) *other = res_other;
     if (serial) *serial = res_serial;
@@ -153,17 +188,29 @@ int bind_last_result(int *dev, int *slot, int *other, int *serial) {
 }
 
 // Bind `host` to `slot`; an input already on `host` takes the slot's old binding (swap).
-static void assign(int dev, int slot, int host) {
-    int16_t *t = dev == BIND_DEV_PAD ? g_bind_pad : g_bind_key;
+static void assign(int dev, int player, int slot, int host) {
+    if (dev == BIND_DEV_PAD && !pad_custom[player - 1]) {  // following player 1 until now: its own table, from a copy
+        memcpy(pad_tables[player - 1], pad_tables[0], sizeof pad_tables[0]);
+        pad_custom[player - 1] = true;
+    }
+    int16_t *t = dev == BIND_DEV_PAD ? pad_tables[player - 1] : g_bind_key;
     int n = dev == BIND_DEV_PAD ? BIND_PAD_COUNT : BIND_KEY_COUNT, other = -1;
     for (int i = 0; i < n; i++)
         if (i != slot && t[i] == host) { other = i; t[i] = t[slot]; }
     t[slot] = (int16_t)host;
-    LOG("[input] %s %s -> %s%s%s%s\n", dev == BIND_DEV_PAD ? "controller" : "keyboard", k_names[slot],
+    LOG("[input] %s %s -> %s%s%s%s\n", dev_name(dev, player), k_names[slot],
         dev == BIND_DEV_PAD ? k_pad_ini[host] : bind_key_label(host), other >= 0 ? " (swapped with " : "",
         other >= 0 ? k_names[other] : "", other >= 0 ? ")" : "");
     if (other >= 0) LOG("[input]   %s -> %s\n", k_names[other], dev == BIND_DEV_PAD ? k_pad_ini[t[other]] : bind_key_label(t[other]));
-    result(other >= 0 ? 2 : 1, dev, slot, other);
+    result(other >= 0 ? 2 : 1, dev, player, slot, other);
+}
+
+// A controller that is another player's: its presses are not for this capture. One that is nobody's (a test's
+// events too) is taken as before, and so is any controller while the capture's player has none (player 1 with
+// "Controllers start at player 2": its table is the one the players following it use).
+static bool other_players_pad(SDL_JoystickID which) {
+    int p = input_pad_player(which);
+    return p >= 0 && p != cap_player && input_player_pad(cap_player);
 }
 
 bool bind_capture_event(const SDL_Event *e) {
@@ -177,23 +224,25 @@ bool bind_capture_event(const SDL_Event *e) {
         if (dev != BIND_DEV_KEY || e->key.scancode == SDL_SCANCODE_F1 || e->key.scancode == SDL_SCANCODE_F9 ||
             e->key.scancode == SDL_SCANCODE_F11 || e->key.scancode >= SDL_SCANCODE_COUNT) return true;
         cap_dev = -1;
-        assign(dev, cap_slot, e->key.scancode);
+        assign(dev, cap_player, cap_slot, e->key.scancode);
         return true;
     case SDL_EVENT_KEY_UP: case SDL_EVENT_TEXT_INPUT:
         return true;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         // Home / Guide opens the menu; a keyboard capture ignores the controller (it times out, or Esc)
         if (dev != BIND_DEV_PAD || e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE || e->gbutton.button >= SDL_GAMEPAD_BUTTON_COUNT) return true;
+        if (other_players_pad(e->gbutton.which)) return true;
         cap_dev = -1;
-        assign(dev, cap_slot, e->gbutton.button);
+        assign(dev, cap_player, cap_slot, e->gbutton.button);
         return true;
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
         return true;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        if (dev == BIND_DEV_PAD && e->gaxis.value > 16000 &&
+        if (dev == BIND_DEV_PAD && e->gaxis.value > 16000 && !other_players_pad(e->gaxis.which) &&
             (e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER || e->gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)) {
             cap_dev = -1;
-            assign(dev, cap_slot, e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? PADB_LTRIGGER : PADB_RTRIGGER);
+            assign(dev, cap_player, cap_slot,
+                   e->gaxis.axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? PADB_LTRIGGER : PADB_RTRIGGER);
         }
         return true;  // (sticks: no menu movement while waiting)
     default:
@@ -205,11 +254,18 @@ bool bind_capture_event(const SDL_Event *e) {
 bool bind_settings_load(const char *key, const char *val) {
     bool pad = !strncmp(key, "bind_pad_", 9), kb = !strncmp(key, "bind_key_", 9);
     if (!pad && !kb) return false;
+    // bind_pad_p2 / p3 / p4 (= custom) and bind_pad_p2_<input>...: that player's own table; any other key: player 1's
+    const char *name = key + 9;
+    int player = pad ? bind_pad_key_player(key, &name) : 1;
+    if (player > 1 && !*name) {
+        if (!strcmp(val, "custom")) pad_custom[player - 1] = true;
+        return true;
+    }
     for (int i = 0; i < (pad ? BIND_PAD_COUNT : BIND_KEY_COUNT); i++) {
-        if (strcmp(key + 9, k_ini[i])) continue;
+        if (strcmp(name, k_ini[i])) continue;
         if (pad) {
             for (int h = 0; h < PADB_HOST_COUNT; h++)
-                if (!strcmp(val, k_pad_ini[h])) g_bind_pad[i] = (int16_t)h;
+                if (!strcmp(val, k_pad_ini[h])) pad_tables[player - 1][i] = (int16_t)h;
         } else {
             SDL_Scancode sc = strcmp(val, "none") ? SDL_GetScancodeFromName(val) : SDL_SCANCODE_UNKNOWN;
             if (sc != SDL_SCANCODE_UNKNOWN || !strcmp(val, "none")) g_bind_key[i] = (int16_t)sc;
@@ -220,8 +276,15 @@ bool bind_settings_load(const char *key, const char *val) {
 
 void bind_settings_save(FILE *f) {
     for (int i = 0; i < BIND_PAD_COUNT; i++)
-        if (g_bind_pad[i] != k_def_pad[i] && g_bind_pad[i] >= 0 && g_bind_pad[i] < PADB_HOST_COUNT)
-            fprintf(f, "bind_pad_%s = %s\n", k_ini[i], k_pad_ini[g_bind_pad[i]]);
+        if (pad_tables[0][i] != k_def_pad[i] && pad_tables[0][i] >= 0 && pad_tables[0][i] < PADB_HOST_COUNT)
+            fprintf(f, "bind_pad_%s = %s\n", k_ini[i], k_pad_ini[pad_tables[0][i]]);
+    for (int p = 1; p < BIND_PLAYERS; p++) {  // (a player following player 1: no lines)
+        if (!pad_custom[p]) continue;
+        fprintf(f, "bind_pad_p%d = custom\n", p + 1);
+        for (int i = 0; i < BIND_PAD_COUNT; i++)
+            if (pad_tables[p][i] != k_def_pad[i] && pad_tables[p][i] >= 0 && pad_tables[p][i] < PADB_HOST_COUNT)
+                fprintf(f, "bind_pad_p%d_%s = %s\n", p + 1, k_ini[i], k_pad_ini[pad_tables[p][i]]);
+    }
     for (int i = 0; i < BIND_KEY_COUNT; i++)
         if (g_bind_key[i] != k_def_key[i])
             fprintf(f, "bind_key_%s = %s\n", k_ini[i], g_bind_key[i] ? SDL_GetScancodeName((SDL_Scancode)g_bind_key[i]) : "none");

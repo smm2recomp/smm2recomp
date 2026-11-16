@@ -34,6 +34,7 @@ extern "C" {
 #include "menu.h"
 void input_reset(void);
 void controls_bindings_draw(float scale);  // controls_ui.mm
+int controls_player(void);  // (the player whose bindings it shows, 1-4)
 #include "../input_bind.h"
 extern "C" {
 #include "../nvn/shader_ahead.h"
@@ -126,9 +127,11 @@ static ImGuiKey key_from_scancode(SDL_Scancode sc) {
 
 // Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back. Bindings don't reach the menus
 // (input_bind.h: none can lock the player out), with one exception: A and B swapped onto the bottom and right buttons
-// (bind_pad_a = south, bind_pad_b = east, the Xbox habit) swaps them here too, as the game does (issue #40).
+// (bind_pad_a = south, bind_pad_b = east, the Xbox habit) swaps them here too, as the game does (issue #40). The
+// bindings read are the first controller's player's: player 1's, or player 2's with "Controllers start at player 2".
 static bool menu_ab_swapped(void) {
-    return g_bind_pad[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && g_bind_pad[BIND_B] == SDL_GAMEPAD_BUTTON_EAST;
+    const int16_t *t = bind_pad_table(g_settings.pads_from_p2 ? 2 : 1);
+    return t[BIND_A] == SDL_GAMEPAD_BUTTON_SOUTH && t[BIND_B] == SDL_GAMEPAD_BUTTON_EAST;
 }
 static ImGuiKey key_from_pad(Uint8 b) {
     bool sw = menu_ab_swapped();
@@ -841,6 +844,52 @@ static void tab_quit(float scale, bool in_game) {
     opt_end();
 }
 
+#include "../hle/stick_deadzone.h"
+extern "C" bool input_preview_stick(int player, int right, int32_t *x, int32_t *y);  // runtime/hle/input.c
+
+// Controls > Sticks (#98): one of the sticks of the controller of the player picked above (controls_player, #100),
+// live, in a square of -100..100 each way. The cross is the stick itself, the dot what the game gets (the stick past
+// its dead zone), the circle the dead zone: a stick that drifts shows as a cross off the centre while nothing is
+// touched, and is cured once the circle covers it. While the stick is inside its dead zone (stick_deadzone gives the
+// game 0, 0) the dot, then at the centre, is red.
+static void stick_preview(const char *label, int right, int pct) {
+    float scale = ImGui::GetFontSize() / 34, side = 160 * scale;
+    int32_t x = 0, y = 0;
+    bool connected = input_preview_stick(controls_player(), right, &x, &y);
+    int32_t dx = x, dy = y;
+    stick_deadzone(&dx, &dy, pct);
+    // (-32768 is -100 too; y is up, the screen's goes down)
+    auto shown = [](int32_t raw) {
+        long v = lround(raw * 100.0 / 32767);
+        return (int)(v < -100 ? -100 : v > 100 ? 100 : v);
+    };
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted(label);
+    ImGui::Dummy(ImVec2(side, side));
+    ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax(), c((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImU32 text = ImGui::GetColorU32(ImGuiCol_Text), dim = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    dl->AddRect(a, b, dim);
+    // (the dead zone: lightly filled and outlined in the text's colour, so a small one shows under the cross too)
+    if (pct > 0) {
+        dl->AddCircleFilled(c, pct * side / 200, ImGui::GetColorU32(ImGuiCol_TextDisabled, 0.35f));
+        dl->AddCircle(c, pct * side / 200, text, 0, 2 * scale);
+    }
+    if (connected) {
+        bool dead = pct > 0 && !dx && !dy;
+        ImVec2 raw(c.x + shown(x) * side / 200, c.y - shown(y) * side / 200);
+        float arm = 8 * scale;
+        dl->AddLine(ImVec2(raw.x - arm, raw.y), ImVec2(raw.x + arm, raw.y), text);
+        dl->AddLine(ImVec2(raw.x, raw.y - arm), ImVec2(raw.x, raw.y + arm), text);
+        dl->AddCircleFilled(ImVec2(c.x + shown(dx) * side / 200, c.y - shown(dy) * side / 200), (dead ? 6 : 4) * scale,
+                            dead ? ImGui::GetColorU32(ImVec4(0.75f, 0.16f, 0.12f, 1)) : text);
+        ImGui::Text("X %+d  Y %+d", shown(x), shown(y));
+    } else {
+        ImGui::TextDisabled("No controller");
+    }
+    ImGui::EndGroup();
+}
+
 static void tab_about(void) {
     header("Button prompts");
     {
@@ -879,6 +928,19 @@ static void tab_about(void) {
         settings_save();
     }
     controls_bindings_draw(ImGui::GetFontSize() / 34);
+    opt_section("Sticks");
+    if (opt_int("Left stick dead zone", &g_settings.stick_deadzone_l, 0, 30, 1, 0, "%d%%",
+                "Ignores small left stick movement, on every controller. Raise it if the stick drifts.", "Off")) {
+        settings_save();
+    }
+    if (opt_int("Right stick dead zone", &g_settings.stick_deadzone_r, 0, 30, 1, 0, "%d%%",
+                "Ignores small right stick movement, on every controller. Raise it if the stick drifts.", "Off")) {
+        settings_save();
+    }
+    stick_preview("Left stick", 0, g_settings.stick_deadzone_l);
+    ImGui::SameLine(0, 48 * (ImGui::GetFontSize() / 34));
+    stick_preview("Right stick", 1, g_settings.stick_deadzone_r);
+    hint("Cross: the stick. Dot: what the game gets. Circle: the dead zone.");
     ImGui::Spacing();
     header("Menu");
     ImGui::TextUnformatted("Open / close this menu:  F1, Esc, the controller's Home / Xbox / PlayStation button, or Back + Start");

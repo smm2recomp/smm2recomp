@@ -44,6 +44,8 @@ typedef struct {
     bool menu_ab_swap;   // a controller's A and B trade places in the game's menus, not in play (#84): runtime/hle/input.c
     bool pads_from_p2;   // every controller is player 2, 3, 4 (the keyboard / on-screen controls stay player 1):
                          // runtime/hle/input.c
+    int stick_deadzone_l;  // a controller's left stick reads 0 within this much of its centre, percent of a full tilt
+    int stick_deadzone_r;  // (0..30, 0 = off; the right stick's): Controls > Sticks (#98), runtime/hle/stick_deadzone.h
     bool move_360;       // analog movement in any direction (the game snaps the stick to 8): runtime/hle/qol.c
     bool blur_removal;   // no tilt-shift blur at the top / bottom of the screen
     bool hide_hero_icon; // no Hero Mode icon on the HUD

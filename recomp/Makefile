@@ -585,6 +585,22 @@ build/test_bg_mute: tools/test_bg_mute.c runtime/services/bg_mute.h
 test-bg-mute: build/test_bg_mute
 	./build/test_bg_mute
 
+# Controls: which player a larecomp.ini bind_pad_* key is for (runtime/input_bind.h), no game files
+build/test_bind_ini: tools/test_bind_ini.c runtime/input_bind.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -o $@ tools/test_bind_ini.c
+test-bind-ini: build/test_bind_ini
+	./build/test_bind_ini
+.PHONY: test-bind-ini
+
+# Controls > Sticks: a stick's dead zone (runtime/hle/stick_deadzone.h), no game files
+build/test_stick_deadzone: tools/test_stick_deadzone.c runtime/hle/stick_deadzone.h
+	@mkdir -p build
+	$(HOSTCC_TEST) -O1 -Wall -o $@ tools/test_stick_deadzone.c -lm
+test-stick-deadzone: build/test_stick_deadzone
+	./build/test_stick_deadzone
+.PHONY: test-stick-deadzone
+
 # Shader compile-ahead alone: scan a RomFS folder, translate, compile (tools/test_shader_ahead.m)
 build/test_shader_ahead: tools/test_shader_ahead.m runtime/nvn/shader_ahead.c runtime/nvn/shader_ahead.h runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/program.c runtime/nvn/maxwell/shader.h runtime/zstd_lib.c
 	clang -O2 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shader_ahead.m runtime/nvn/shader_ahead.c \
