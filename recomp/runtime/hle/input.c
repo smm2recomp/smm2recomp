@@ -687,6 +687,11 @@ uint64_t input_buttons_now(void) {
     return (menu_input_captured() ? 0 : key_buttons | pad_buttons | touch_buttons_dpad()) | script_buttons;
 }
 
+// The pad state player 1's game reads, each time it reads it (a game's play recorder: games/smm2/playrec.c).
+__attribute__((weak)) void game_pad_read(uint64_t buttons, int32_t lx, int32_t ly, int32_t rx, int32_t ry) {
+    (void)buttons, (void)lx, (void)ly, (void)rx, (void)ry;
+}
+
 static int32_t clamp_axis(int32_t v) { return v > 32767 ? 32767 : v < -32767 ? -32767 : v; }
 
 // NpadFullKeyState / NpadHandheldState / NpadJoy*State share this layout (0x28 bytes):
@@ -719,9 +724,28 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
         return;
     }
     if (id != 0) return;  // docked: Handheld stays disconnected
-    if (padscript_active()) {  // a scripted replay (RECOMP_PAD_SCRIPT): the script's buttons alone, sticks at rest
-        *(uint64_t *)(s + 8) = padscript_buttons();
+    {   // a direct boot's tick (games/smm2/mods/boot.c), once per presented frame, on the game's main thread
+        extern void boot_game_tick(Cpu *c);
+        extern uint64_t renderer_present_count(void);
+        static uint64_t boot_frame = ~0ull;
+        if (renderer_present_count() != boot_frame) { boot_frame = renderer_present_count(); boot_game_tick(c); }
+    }
+    if (padscript_active()) {  // a scripted replay (RECOMP_PAD_SCRIPT): the script's buttons and sticks alone
+        uint64_t b = padscript_buttons();
+        int32_t lx, ly, rx, ry;
+        padscript_sticks(&lx, &ly, &rx, &ry);
+        if (lx < -16000) b |= 1ull << 16;   // (the stick directions as above)
+        if (ly > 16000) b |= 1ull << 17;
+        if (lx > 16000) b |= 1ull << 18;
+        if (ly < -16000) b |= 1ull << 19;
+        if (rx < -16000) b |= 1ull << 20;
+        if (ry > 16000) b |= 1ull << 21;
+        if (rx > 16000) b |= 1ull << 22;
+        if (ry < -16000) b |= 1ull << 23;
+        *(uint64_t *)(s + 8) = b;
+        *(int32_t *)(s + 16) = lx, *(int32_t *)(s + 20) = ly, *(int32_t *)(s + 24) = rx, *(int32_t *)(s + 28) = ry;
         *(uint32_t *)(s + 32) = 1;  // IsConnected
+        game_pad_read(b, lx, ly, rx, ry);  // (what the game read, as for a controller: a replay records it again)
         return;
     }
     extern void warp_game_tick(Cpu *c);
@@ -826,6 +850,7 @@ static void fill_state(Cpu *c, uint8_t *s, uint32_t id, bool single) {
     *(int32_t *)(s + 24) = rx;
     *(int32_t *)(s + 28) = ry;
     *(uint32_t *)(s + 32) = 1;  // IsConnected
+    game_pad_read(b, lx, ly, rx, ry);
 }
 
 #define FILL1 fill_state(c, (uint8_t *)(uintptr_t)c->x[0], *(uint32_t *)(uintptr_t)c->x[1], true)

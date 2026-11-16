@@ -230,6 +230,20 @@ UIFLAGS  := -x c++
 GAMELIB  := $(B)/$(GAME_ID)game.so
 GAMELIB_LDFLAGS := -shared $(LLD)
 GAMELIB_SHARED := -shared
+ifeq ($(HEADLESS),1)
+# HEADLESS=1: no window, no GPU (runtime/nvn/null/null.c): the null renderer in place of Vulkan, no overlay menu or
+# setup screen (runtime/ui), no ImGui; links SDL3 alone (its dummy video driver). Its own build folder.
+B        := $(B)-headless
+GEN_OBJ  := $(patsubst %.c,$(B)/obj/%.o,$(patsubst $(GEN)/%,%,$(GEN_SRC))) $(B)/obj/tools/gamelib_entry.o
+EXE      := $(B)/$(GAME_ID)recomp
+GAMELIB  := $(B)/$(GAME_ID)game.so
+LDFLAGS  := $(LLD) -rdynamic $(if $(DEPS),-L$(DEPS)/lib -Wl$(comma)-rpath$(comma)$(DEPS)/lib) -lSDL3 -lpthread -ldl -lm
+BACKEND_SRC := runtime/nvn/null/null.c
+BACKEND_OBJ := $(B)/rt/nvn/null/null.o
+OSFLAGS  += -DRECOMP_HEADLESS
+UI_OBJ   :=
+IMGUI_OBJ :=
+endif
 else
 EXE      := $(B)/$(GAME_ID)recomp.exe
 DEPINC   := $(if $(DEPS),-I$(DEPS)/include)
@@ -396,6 +410,7 @@ $(B)/rt/ui/%.o: runtime/ui/%.mm $(RT_HDRS)
 # the tag, e.g. v0.1.0 (release builds pass RECOMP_VERSION=<tag>), else git's description, else "dev"
 RECOMP_VERSION ?= $(shell git describe --tags --match 'v[0-9]*' 2>/dev/null || echo dev)
 $(B)/rt/ui/launcher.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'
+$(B)/rt/games/smm2/playrec.o: RTFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'  # (a play recording's meta.json)
 $(B)/rt/ui/menu.o: CXXFLAGS += -DRECOMP_VERSION='"$(RECOMP_VERSION)"'  # (the menu's About row)
 $(B)/rt/ui/launcher.o: runtime/gamebuild.h runtime/paths.h
 
