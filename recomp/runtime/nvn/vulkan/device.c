@@ -237,9 +237,13 @@ static void create_device(void) {
                                             .maintenance4 = VK_TRUE, .robustImageAccess = robust && have13.robustImageAccess,
                                             .pNext = g_vk.custom_border ? (void *)&cbc : g_vk.divisor ? (void *)&div : NULL};
     VkPhysicalDeviceVulkan12Features f12 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-                                            .timelineSemaphore = VK_TRUE, .shaderInt8 = VK_TRUE, .samplerMirrorClampToEdge = VK_TRUE,
-                                            .uniformAndStorageBuffer8BitAccess = VK_TRUE, .storageBuffer8BitAccess = VK_TRUE,
-                                            .scalarBlockLayout = VK_TRUE, .bufferDeviceAddress = g_vk.bda, .pNext = &f13};
+                                            // (as supported: Turnip on an Adreno 643 has no 8-bit storage, and asking for a
+                                            // missing feature fails the whole device; the translated shaders don't use it)
+                                            .timelineSemaphore = VK_TRUE, .shaderInt8 = have12.shaderInt8,
+                                            .samplerMirrorClampToEdge = have12.samplerMirrorClampToEdge,
+                                            .uniformAndStorageBuffer8BitAccess = have12.uniformAndStorageBuffer8BitAccess,
+                                            .storageBuffer8BitAccess = have12.storageBuffer8BitAccess,
+                                            .scalarBlockLayout = have12.scalarBlockLayout, .bufferDeviceAddress = g_vk.bda, .pNext = &f13};
     VkPhysicalDeviceVulkan11Features f11 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
                                             .storageBuffer16BitAccess = VK_TRUE, .pNext = &f12};
     VkPhysicalDeviceFaultFeaturesEXT ff = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT, .deviceFault = VK_TRUE,
