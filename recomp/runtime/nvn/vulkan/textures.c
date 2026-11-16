@@ -1000,7 +1000,9 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
         switch (d->wrap[i]) {
         case 0: case 7: modes[i] = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE; break;
         case 1: modes[i] = VK_SAMPLER_ADDRESS_MODE_REPEAT; break;
-        case 2: case 3: modes[i] = VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE; break;
+        case 2: case 3:  // (without the feature: mirrored repeat, the same for coordinates within -1..2)
+            modes[i] = g_vk.mirror_clamp ? VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            break;
         case 4: case 5: modes[i] = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; border = true; break;
         case 6: modes[i] = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT; break;
         default: modes[i] = VK_SAMPLER_ADDRESS_MODE_REPEAT;

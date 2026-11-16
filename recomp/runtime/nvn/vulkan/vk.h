@@ -65,6 +65,7 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import, geometry;
+    bool mirror_clamp;  // samplerMirrorClampToEdge (not on Turnip / Adreno: textures.c falls back to mirrored repeat)
     bool bda;  // bufferDeviceAddress: shader global memory through the heap's device address (exec.c gmem_desc)
     // window
     VkSurfaceKHR surface;

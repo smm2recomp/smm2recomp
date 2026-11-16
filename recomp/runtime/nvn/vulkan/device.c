@@ -224,6 +224,7 @@ static void create_device(void) {
     if (amd_linux && g_vk.host_import && !low_vram && !ng)
         LOG("[vk] AMD's Linux driver: the guest heap is not imported (it slows every submit, #87)\n");
     bool no_gmem = !g_vk.host_import || (ng ? atoi(ng) != 0 : low_vram || amd_linux);
+    g_vk.mirror_clamp = have12.samplerMirrorClampToEdge;
     g_vk.bda = have12.bufferDeviceAddress && have.features.shaderInt64 && !no_gmem && !getenv("LARECOMP_VK_NO_BDA");
     VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT div = {
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT,
