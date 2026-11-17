@@ -1,5 +1,6 @@
 // Unit tests for the players' controller bindings in larecomp.ini (runtime/input_bind.h bind_pad_key_player, #100):
-// which player a bind_pad_* key is for, and the name of the input it binds.
+// which player a bind_pad_* key is for, and the name of the input it binds; and which button confirms in the menus
+// (bind_menu_ab_swapped, #84): the same as in the game's menus.
 // usage: make test-bind-ini
 #include <stdio.h>
 #include <string.h>
@@ -41,10 +42,22 @@ static void test_players(void) {
     CHECK("player 2, no input", player_of("bind_pad_p2_", "") == 2);
 }
 
+// The four cases of bindings and "A and B swapped in menus" (true = the bottom face button confirms), and the
+// setting doing nothing with "Controllers start at player 2", as in the game's menus
+static void test_menu_ab(void) {
+    CHECK("default bindings, setting off: right", !bind_menu_ab_swapped(false, false, false));
+    CHECK("default bindings, setting on: bottom", bind_menu_ab_swapped(false, true, false));
+    CHECK("A and B bound swapped, setting off: bottom", bind_menu_ab_swapped(true, false, false));
+    CHECK("A and B bound swapped, setting on: the two swaps cancel out", !bind_menu_ab_swapped(true, true, false));
+    CHECK("controllers from player 2: the setting changes nothing", !bind_menu_ab_swapped(false, true, true));
+    CHECK("controllers from player 2: the bindings still count", bind_menu_ab_swapped(true, true, true));
+}
+
 int main(void) {
     test_player1();
     test_marker();
     test_players();
+    test_menu_ab();
     if (failures) { printf("%d FAILED\n", failures); return 1; }
     printf("bindings ini keys: all passed\n");
     return 0;
