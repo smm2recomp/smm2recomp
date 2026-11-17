@@ -2,7 +2,7 @@
 // mod does it on a console (_vendor/ocw-client-mod). The player signs in at opencourse.world, accepts its terms and
 // is given a domain and a personal token; those go in ocw-config.json in the data folder, next to smm2mods.ini:
 //
-//     { "domain": "server.opencourse.world", "token": "<22 characters>", "ip": "10.0.0.5" }
+//     { "domain": "server.opencourse.world", "token": "<22 characters>", "ip": "10.0.0.5:6000" }
 //
 //   domain  the host written into the game, so the game looks it up, sends it as Host: and names it for SNI
 //           (at most 29 characters: the string slot in the game's own binary). May itself be an address.

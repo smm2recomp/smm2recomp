@@ -1484,7 +1484,7 @@ of a logged line along with the player id.
    |---|---|
    | `domain` | the host written into the game, so the game looks it up, sends it as `Host:` and names it for SNI. At most **29 characters**: the size of the string slot in the game's own binary. May itself be an address |
    | `token` | your account's token, exactly **22 characters**. A secret: keep it out of git |
-   | `ip` | optional. The address `domain` resolves to, instead of asking the host resolver — this is how a self-hosted or local OCW instance is reached, and how an IP-only set-up keeps a real name for SNI and `Host:` |
+   | `ip` | optional. The address `domain` resolves to, instead of asking the host resolver — this is how a self-hosted or local OCW instance is reached, and how an IP-only set-up keeps a real name for SNI and `Host:`. A port may follow it (`10.0.0.5:6000`): the game connects on 443 whatever happens, and that connection is sent to the port instead |
 
 3. `backend=ocw` in `smm2mods.ini` (what the Online section's backend choice writes). Both are needed: without the
    config the backend logs what is missing and the game stays offline, and without the backend the config is

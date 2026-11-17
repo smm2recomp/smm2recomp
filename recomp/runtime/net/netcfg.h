@@ -16,6 +16,9 @@
 //              account's game token come from acc (services/acc.c, runtime/net/token.c)
 //   ocw        OpenCourse World: the game's own online client against the player's own OCW account
 //              (games/smm2/mods/ocw.c reads ocw-config.json in the data folder and calls net_ocw_set_target).
+//              That config's "ip" may name a port as well (10.0.0.5:6000): the game connects to the host on 443
+//              whatever it is, and net_dest_port sends that connection to the port instead - a self-hosted OCW
+//              need not have 443 to itself.
 //              The only backend that reaches a public host, and it reaches exactly the one name that config
 //              names - every other name still fails and every other address is still refused. Its certificate is
 //              checked: the chain must end in a public root the runtime carries (net/roots.c: Let's Encrypt's
