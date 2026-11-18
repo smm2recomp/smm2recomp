@@ -7,6 +7,10 @@ __asm__(".section .drectve\n"
         ".ascii \" -export:rt_dispatch -export:rt_svc -export:rt_brk -export:rt_udf -export:rt_ticks\"\n"
         ".ascii \" -export:fnprof_hit -export:g_fnprof,data -export:smm2_player_hook -export:smm2_mod_after\"\n"
         ".ascii \" -export:smm1_extras_after -export:smm2_relax_ok -export:smm2_ocw_header\"\n"
+        ".ascii \" -export:smm2_eden_point -export:smm2_eden_return -export:smm2_side_probe_enter\"\n"
+        ".ascii \" -export:smm2_side_probe_return\"\n"
         ".ascii \" -export:guest_call_orig\"\n"
+        ".ascii \" -export:fnprof_edge -export:fn_enter_hook -export:probe_after -export:g_probe,data\"\n"
+        ".ascii \" -export:g_probe_pending,data\"\n"
         ".text\n");
 #endif

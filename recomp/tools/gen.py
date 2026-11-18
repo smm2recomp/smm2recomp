@@ -344,12 +344,12 @@ class Module:
             t = ins.target
             if self.in_text(t):
                 refs.add(t)
-                return [f'c->x[30] = {hx(a + 4)}; {fname(t)}(c);']
-            return [f'c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c);']
+                return [f'c->x[30] = {hx(a + 4)}; {fname(t)}(c); FN_AFTER({hx(a + 4)});']
+            return [f'c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c); FN_AFTER({hx(a + 4)});']
         if k == 'blr':
-            return [f'c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; rt_dispatch(c);']
+            return [f'c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; FN_EDGE({hx(a)}, 1); rt_dispatch(c); FN_AFTER({hx(a + 4)});']
         if k == 'br':
-            return [f'c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);']
+            return [f'c->pc = {ins.target}; FN_EDGE({hx(a)}, 2); __attribute__((musttail)) return rt_dispatch(c);']
         if k == 'ret':
             return ['return;']
         raise Unsupported(k)
@@ -422,11 +422,11 @@ class Module:
                 t = ins.target
                 if self.in_text(t):
                     refs.add(t)
-                    out.append(f'    c->x[30] = {hx(a + 4)}; {fname(t)}(c);')
+                    out.append(f'    c->x[30] = {hx(a + 4)}; {fname(t)}(c); FN_AFTER({hx(a + 4)});')
                 else:
-                    out.append(f'    c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c);')
+                    out.append(f'    c->x[30] = {hx(a + 4)}; c->pc = {hx(t)}; rt_dispatch(c); FN_AFTER({hx(a + 4)});')
             elif k == 'blr':
-                out.append(f'    c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; rt_dispatch(c);')
+                out.append(f'    c->pc = {ins.target}; c->x[30] = {hx(a + 4)}; FN_EDGE({hx(a)}, 1); rt_dispatch(c); FN_AFTER({hx(a + 4)});')
             elif k == 'br':
                 jt = tables.get(a)
                 if jt == 'all':
@@ -437,7 +437,7 @@ class Module:
                     out.append(f'    switch ({ins.target}) {{ {cases} default: break; }}')
                     out.append(f'    c->pc = {ins.target}; goto L_dispatch;')
                     continue
-                out.append(f'    c->pc = {ins.target}; __attribute__((musttail)) return rt_dispatch(c);')
+                out.append(f'    c->pc = {ins.target}; FN_EDGE({hx(a)}, 2); __attribute__((musttail)) return rt_dispatch(c);')
             elif k == 'ret':
                 out.append('    return;')
             last = k

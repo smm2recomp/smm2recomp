@@ -109,11 +109,38 @@ static void shot_at(int64_t k) {
     }
 }
 
+// RECOMP_TRACE_POINT=eden: the records are written at the player's state frame (main+0x15d3cc0, games/smm2/patches.py
+// EDEN_PLAYER), where smm2-hooks samples its Eden recordings, one per player update: the update numbers it (as here) and
+// the state frame after it writes it. The clock and the script stay the player update's.
+static int eden_mode = -1;
+static bool eden_due;
+static int32_t eden_idx;
+static uint32_t eden_buttons;
+static bool eden_point(void) {
+    if (eden_mode < 0) { const char *v = getenv("RECOMP_TRACE_POINT"); eden_mode = v && !strcmp(v, "eden"); }
+    return eden_mode;
+}
+
+static bool eden_in;  // the followed player's call is running
+void smm2_eden_point(Cpu *c) {
+    if (eden_due && out && c->x[0] == tracked) eden_in = true, eden_due = false;
+}
+void smm2_eden_return(Cpu *c) {  // (smm2-hooks reads its fields after the call: the record is written at the return)
+    (void)c;
+    if (!eden_in) return;
+    eden_in = false;
+    record(tracked, eden_idx, eden_buttons);
+}
+
 static void finish(const char *why) {
     state = 2;
     if (out) { fclose(out); out = NULL; }
     LOG("[trace] end after %lld records (%s)\n", (long long)n, why);
-    if (getenv("RECOMP_TRACE_EXIT")) { fflush(stderr); _exit(0); }
+    extern void fnprof_graph_write(void);  // (runtime/fnprof.c: a call graph being recorded ends with the trace)
+    fnprof_graph_write();
+    extern void probe_flush(void);  // (runtime/probe.c: the probe log, which _exit would lose)
+    probe_flush();
+    if (getenv("RECOMP_TRACE_EXIT") || getenv("LARECOMP_FNPROF_GRAPH_EXIT")) { fflush(stderr); _exit(0); }
 }
 
 // In play or in a menu (runtime/hle/input.c's "A and B swapped in menus", #84): the player is updated each frame while
@@ -164,10 +191,35 @@ void smm2_player_hook(Cpu *c) {
     shot_at(n);
     bool scripted = padscript_game_clock();
     int64_t pos = scripted ? padscript_pos() : 0;
-    if (out) record(self, (int32_t)(scripted ? pos : n), (uint32_t)padscript_buttons());
+    extern void fnprof_player_update(int64_t n);  // (runtime/fnprof.c: the call graph's window, LARECOMP_FNPROF_GRAPH)
+    fnprof_player_update(n);
+    if (out && !eden_point()) record(self, (int32_t)(scripted ? pos : n), (uint32_t)padscript_buttons());
+    else if (out) { eden_idx = (int32_t)(scripted ? pos : n); eden_buttons = (uint32_t)padscript_buttons(); eden_due = true; }
     n++;
     bool done = scripted ? padscript_done() : rec_frames && n >= rec_frames;
     if (scripted) padscript_tick();
     if (out) fflush(out);  // (a run stopped from outside keeps every record so far)
     if (done) finish("done");
 }
+
+// RECOMP_SIDE_PROBE_OUT=<file>: after each sideways spring execute (main+0x13da5d0, games/smm2/patches.py), a line
+// "<player updates so far> <object> <animation machine state (+0x1750)> <model animation frame> <rate>": the model
+// is at +0x10, its animation at +0x38, that animation's frame controller at +0x30 (+4 the frame, +8 the rate).
+static FILE *side_out;
+static uint64_t side_self;
+void smm2_side_probe_enter(Cpu *c) { side_self = c->x[0]; }
+void smm2_side_probe_return(Cpu *c) {
+    (void)c;
+    static int init;
+    if (!init) { init = 1; const char *p = getenv("RECOMP_SIDE_PROBE_OUT"); if (p && *p) side_out = fopen(p, "w"); }
+    if (!side_out || !readable(side_self, 0x1758)) return;
+    uint64_t model = LD64(side_self + 0x10), anim = readable(model, 0x40) ? LD64(model + 0x38) : 0;
+    uint64_t ctl = readable(anim, 0x38) ? LD64(anim + 0x30) : 0;
+    float frame = -1, rate = -1;
+    if (readable(ctl, 0x10)) { memcpy(&frame, (void *)(uintptr_t)(ctl + 4), 4); memcpy(&rate, (void *)(uintptr_t)(ctl + 8), 4); }
+    uint32_t st;
+    memcpy(&st, (void *)(uintptr_t)(side_self + 0x1750), 4);
+    fprintf(side_out, "%lld %llx %u %g %g\n", (long long)n, (unsigned long long)side_self, st, frame, rate);
+    fflush(side_out);
+}
+
