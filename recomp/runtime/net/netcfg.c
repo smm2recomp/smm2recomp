@@ -423,8 +423,9 @@ void net_ocw_set_target(const char *host, const char *ip) {
     ocw_cur = 0;
     ocw_when = 0;
     pthread_mutex_unlock(&ocw_lock);
-    LOG("[net] ocw host \"%s\"%s%s%s%u\n", ocw_name, ocw_fixed[0] ? " at " : "", ocw_fixed,
-        ocw_port ? " port " : "", ocw_port);
+    char port_note[16] = "";
+    if (ocw_port) snprintf(port_note, sizeof port_note, " port %u", (unsigned)ocw_port);
+    LOG("[net] ocw host \"%s\"%s%s%s\n", ocw_name, ocw_fixed[0] ? " at " : "", ocw_fixed, port_note);
 }
 
 bool net_ocw_host(char *out, size_t cap) {
