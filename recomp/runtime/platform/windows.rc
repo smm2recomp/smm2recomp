@@ -1,3 +1,5 @@
 // The .exe's icon: the owner's app icon (docs/branding/app-icon.ico, tools/make_icons.sh), compiled by the Makefile
 // with `zig rc /i ../docs/branding` and linked into the exe. ID 1: Explorer and the taskbar use the first icon resource.
 1 ICON "app-icon.ico"
+// Its manifest (RT_MANIFEST = 24, ID 1 for an exe): the process's code page is UTF-8, like the paths it handles
+1 24 "windows.manifest"

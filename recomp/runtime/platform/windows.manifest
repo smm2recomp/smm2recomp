@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Paths are UTF-8 everywhere in the runtime (SDL's file dialogs, launcher.ini), and the C library's char * calls
+     (fopen, stat, opendir, getenv) read them in the process's code page: UTF-8 here, instead of the system's ANSI
+     code page, so a file or folder name outside ASCII (Super Mario Maker(TM) 2, a Chinese or accented folder) is
+     found. Windows 10 1903 and later; older ones ignore it. Linked into smm2recomp.exe (runtime/platform/windows.rc)
+     and hactool.exe (tools/build_hactool.sh), which is handed the same paths. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

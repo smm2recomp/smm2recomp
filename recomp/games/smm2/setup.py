@@ -269,7 +269,7 @@ class Hactool:
 
     def run(self, *args, what='hactool'):
         r = subprocess.run([self.exe, '-k', self.keys, '--disablekeywarns', *args], capture_output=True,
-                           errors='replace', text=True)
+                           encoding='utf-8', errors='replace', text=True)
         out = r.stdout + r.stderr
         if r.returncode != 0 or 'Invalid NCA header' in out or 'Failed to open' in out:
             # (hactool's own wording, masked: never key values)
