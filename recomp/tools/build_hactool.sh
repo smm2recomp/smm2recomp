@@ -100,6 +100,13 @@ for c in "$SRC"/mbedtls/library/*.c "$SRC"/*.c; do
     if [ ${#pids[@]} -ge 8 ]; then wait "${pids[0]}"; pids=("${pids[@]:1}"); fi
 done
 for p in "${pids[@]}"; do wait "$p"; done
+# Windows: the runtime's manifest (UTF-8 code page), so the player's paths outside ASCII reach fopen as they are
+# (runtime/platform/windows.manifest)
+if [ "$TARGET" = windows-x86_64 ]; then
+    echo '1 24 "windows.manifest"' > "$OUT/obj/hactool.rc"
+    "$ZIG" rc /fo "$OUT/obj/hactool.res" /i runtime/platform "$OUT/obj/hactool.rc"
+    objs+=("$OUT/obj/hactool.res")
+fi
 "$ZIG" cc -target "$ZT" -o "$OUT/hactool$EXE" "${objs[@]}" $([[ "$TARGET" == macos-* ]] || echo -s) \
     $([ "$TARGET" = windows-x86_64 ] && echo -ladvapi32)
 rm -rf "$OUT/obj" "$OUT"/*.lib "$OUT"/*.pdb  # (zig leaves an import library next to a Windows exe)

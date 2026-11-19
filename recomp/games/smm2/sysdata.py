@@ -36,7 +36,7 @@ DATA_TITLES = {
 
 
 def run(cmd):
-    return subprocess.run(cmd, capture_output=True, text=True, errors='replace')
+    return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
 
 def fail(code, what, hint):

@@ -391,8 +391,9 @@ $(B)/rt/vk_shim.o: $(B)/vk_shim.c
 	@mkdir -p $(dir $@)
 	$(CC) $(RTFLAGS) -Wno-unused-parameter -c $< -o $@
 
-# Windows: the app icon as a resource (docs/branding/app-icon.ico, tools/make_icons.sh), compiled by zig's rc
-$(B)/windows.res: runtime/platform/windows.rc ../docs/branding/app-icon.ico
+# Windows: the app icon (docs/branding/app-icon.ico, tools/make_icons.sh) and the manifest (UTF-8 code page) as
+# resources, compiled by zig's rc
+$(B)/windows.res: runtime/platform/windows.rc ../docs/branding/app-icon.ico runtime/platform/windows.manifest
 	@mkdir -p $(dir $@)
 	$(ZIG) rc /fo $@ /i ../docs/branding $<
 

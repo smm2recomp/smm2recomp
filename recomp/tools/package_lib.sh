@@ -29,7 +29,12 @@ stage_common() {
     [ -d "build/zig-$zt" ] || ZIG_TARGET=$zt ZIG_OUT="build/zig-$zt" tools/fetch_zig.sh
     cp -R "build/zig-$zt" "$dest/zig"
     # hactool
-    [ -x "build/hactool-$target/hactool" ] || [ -f "build/hactool-$target/hactool.exe" ] || tools/build_hactool.sh "$target"
+    # (built again when its script or the Windows manifest is newer than the one already built)
+    h=build/hactool-$target/hactool
+    [ -f "$h.exe" ] && h=$h.exe
+    if [ ! -e "$h" ] || [ tools/build_hactool.sh -nt "$h" ] || [ runtime/platform/windows.manifest -nt "$h" ]; then
+        tools/build_hactool.sh "$target"
+    fi
     cp -R "build/hactool-$target" "$dest/hactool"
     # licenses
     cp LICENSE-LASRecomp "$dest/licenses/LICENSE-LASRecomp.txt"
